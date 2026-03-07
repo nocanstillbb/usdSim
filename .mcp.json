@@ -13,6 +13,17 @@
       "env": {
         "QML_INSPECTOR_SOCKET": "127.0.0.1:37521"
       }
+    },
+    "context7-mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "env": {}
+    },
+    "playwright-mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp"]
     }
   }
 }
