@@ -1,0 +1,3 @@
+[submodule "playqmlright"]
+	path = playqmlright
+	url = https://github.com/nocanstillbb/playqmlright.git
