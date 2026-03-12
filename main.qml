@@ -150,20 +150,24 @@ ApplicationWindow {
                             }
                         }
                         TapHandler {
+                            acceptedModifiers: Qt.ControlModifier
                             onTapped: function(eventPoint, button) {
-                                let mods = eventPoint.event.modifiers
                                 let index = treeView.index(row, column)
-                                if (mods & Qt.ControlModifier) {
-                                    treeView.selectionModel.setCurrentIndex(index, ItemSelectionModel.Toggle | ItemSelectionModel.Rows)
-                                    root._syncingSelection = true
-                                    viewport.togglePrimPath(model.path)
-                                    root._syncingSelection = false
-                                } else {
-                                    treeView.selectionModel.setCurrentIndex(index, ItemSelectionModel.ClearAndSelect | ItemSelectionModel.Rows)
-                                    root._syncingSelection = true
-                                    viewport.selectPrimPath(model.path)
-                                    root._syncingSelection = false
-                                }
+                                treeView.selectionModel.setCurrentIndex(index, ItemSelectionModel.Toggle | ItemSelectionModel.Rows)
+                                root._syncingSelection = true
+                                viewport.togglePrimPath(model.path)
+                                root._syncingSelection = false
+                                loadAttrs(model.path)
+                            }
+                        }
+                        TapHandler {
+                            acceptedModifiers: Qt.NoModifier
+                            onTapped: function(eventPoint, button) {
+                                let index = treeView.index(row, column)
+                                treeView.selectionModel.setCurrentIndex(index, ItemSelectionModel.ClearAndSelect | ItemSelectionModel.Rows)
+                                root._syncingSelection = true
+                                viewport.selectPrimPath(model.path)
+                                root._syncingSelection = false
                                 loadAttrs(model.path)
                             }
                             onDoubleTapped: {
