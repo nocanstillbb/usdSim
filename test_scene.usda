@@ -30,6 +30,7 @@ def Xform "World"
 
         def Cylinder "Cylinder"
         {
+            uniform token axis = "Y"
             double height = 3
             color3f[] primvars:displayColor = [(0.2, 1, 0.4)]
             double radius = 1
@@ -39,6 +40,7 @@ def Xform "World"
 
         def Cone "Cone"
         {
+            uniform token axis = "Y"
             double height = 3
             color3f[] primvars:displayColor = [(1, 0.9, 0.1)]
             double radius = 1
@@ -48,6 +50,7 @@ def Xform "World"
 
         def Capsule "Capsule"
         {
+            uniform token axis = "Y"
             double height = 2
             color3f[] primvars:displayColor = [(0.8, 0.3, 1)]
             double radius = 0.6
