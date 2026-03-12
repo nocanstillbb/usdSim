@@ -14,11 +14,17 @@ layout(std140, binding = 0) uniform PerObject {
 
 void main()
 {
-    vec3 N    = normalize(vNormal);
-    vec3 L    = normalize(ubo.lightDir.xyz);
-    float d   = abs(dot(N, L));
-    float lit = 0.2 + 0.8 * d;
-    // color.a >= 0.5 → lit shading; < 0.5 → flat color (wireframe)
     float useLit = step(0.5, ubo.color.a);
-    fragColor = vec4(vColor * mix(1.0, lit, useLit), 1.0);
+    if (useLit > 0.5) {
+        // Lit shading (solid meshes)
+        vec3 N    = normalize(vNormal);
+        vec3 L    = normalize(ubo.lightDir.xyz);
+        float d   = abs(dot(N, L));
+        float lit = 0.2 + 0.8 * d;
+        fragColor = vec4(vColor * lit, 1.0);
+    } else {
+        // Flat color (outline / wireframe) — skip normalize to avoid NaN
+        // when lightDir.xyz is repurposed as mesh centroid which can be (0,0,0)
+        fragColor = vec4(vColor, 1.0);
+    }
 }
