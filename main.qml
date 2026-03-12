@@ -5,8 +5,8 @@ import UsdBrowser 1.0
 
 ApplicationWindow {
     id: root
-    width: 1100
-    height: 700
+    width: 1400
+    height: 800
     visible: true
     title: doc.isOpen ? ("USD 浏览器 — " + doc.filePath) : "USD 浏览器"
     color: "black"
@@ -16,6 +16,7 @@ ApplicationWindow {
     ListModel    { id: attrModel }
 
     property string selectedPrimPath: ""
+    property bool _syncingSelection: false
 
     function loadAttrs(path) {
         root.selectedPrimPath = path
@@ -149,14 +150,29 @@ ApplicationWindow {
                             }
                         }
                         TapHandler {
-                            onTapped: {
-                                treeView.selectionModel.setCurrentIndex( treeView.index(row, column), ItemSelectionModel.ClearAndSelect | ItemSelectionModel.Rows )
+                            onTapped: function(eventPoint, button) {
+                                let mods = eventPoint.event.modifiers
+                                let index = treeView.index(row, column)
+                                if (mods & Qt.ControlModifier) {
+                                    treeView.selectionModel.setCurrentIndex(index, ItemSelectionModel.Toggle | ItemSelectionModel.Rows)
+                                    root._syncingSelection = true
+                                    viewport.togglePrimPath(model.path)
+                                    root._syncingSelection = false
+                                } else {
+                                    treeView.selectionModel.setCurrentIndex(index, ItemSelectionModel.ClearAndSelect | ItemSelectionModel.Rows)
+                                    root._syncingSelection = true
+                                    viewport.selectPrimPath(model.path)
+                                    root._syncingSelection = false
+                                }
                                 loadAttrs(model.path)
                             }
                             onDoubleTapped: {
                                 let index = treeView.index(row, column)
                                 treeView.selectionModel.setCurrentIndex(index, ItemSelectionModel.ClearAndSelect | ItemSelectionModel.Rows)
                                 loadAttrs(model.path)
+                                root._syncingSelection = true
+                                viewport.selectPrimPath(model.path)
+                                root._syncingSelection = false
                             }
                         }
 
@@ -179,7 +195,7 @@ ApplicationWindow {
                             anchors.fill: parent
                             color:
                             {
-                                if (primDelegate.current)
+                                if (primDelegate.selected || primDelegate.current)
                                     return "#007acc"
                                 else if (primTree.hoveredRow === row)
                                     return "#70007acc"
@@ -197,11 +213,14 @@ ApplicationWindow {
                             color: "#aaaaaa"; font.bold: true; font.pixelSize: 11
 
                             TapHandler {
-                                onSingleTapped: {
+                                onSingleTapped: function(eventPoint, button) {
                                     let index = treeView.index(row, column)
                                     treeView.selectionModel.setCurrentIndex(index, ItemSelectionModel.ClearAndSelect | ItemSelectionModel.Rows)
                                     treeView.toggleExpanded(row)
                                     loadAttrs(model.path)
+                                    root._syncingSelection = true
+                                    viewport.selectPrimPath(model.path)
+                                    root._syncingSelection = false
                                 }
                             }
                         }
@@ -246,6 +265,40 @@ ApplicationWindow {
                 id: viewport
                 anchors.fill: parent
                 document: doc
+
+                onSelectedPrimPathsChanged: {
+                    if (root._syncingSelection) return
+                    let paths = viewport.selectedPrimPaths
+                    if (paths.length === 0) {
+                        sel.clearSelection()
+                        sel.clearCurrentIndex()
+                        root.selectedPrimPath = ""
+                        attrModel.clear()
+                        return
+                    }
+                    sel.clearSelection()
+                    for (let i = 0; i < paths.length; i++) {
+                        let idx = doc.findPrimModelIndex(paths[i])
+                        if (idx.valid) {
+                            primTree.expandToIndex(idx)
+                            if (i === 0)
+                                sel.setCurrentIndex(idx, ItemSelectionModel.Select | ItemSelectionModel.Rows)
+                            else
+                                sel.select(idx, ItemSelectionModel.Select | ItemSelectionModel.Rows)
+                        }
+                    }
+                    // Show attrs for last selected path, scroll to first
+                    let lastPath = paths[paths.length - 1]
+                    loadAttrs(lastPath)
+                    Qt.callLater(function() {
+                        let firstIdx = doc.findPrimModelIndex(paths[0])
+                        if (firstIdx.valid) {
+                            let row = primTree.rowAtIndex(firstIdx)
+                            if (row >= 0)
+                                primTree.positionViewAtRow(row, Qt.AlignVCenter)
+                        }
+                    })
+                }
             }
 
             // 视口提示标签
