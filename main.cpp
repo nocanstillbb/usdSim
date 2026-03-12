@@ -1,10 +1,18 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
-#include <InspectorServer.h>   // from the submodule
+#include <QQmlContext>
+#include <QQuickStyle>
+#include <InspectorServer.h>
+#include "UsdDocument.h"
+#include "UsdViewportItem.h"
 
 int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
+    QQuickStyle::setStyle("Basic");
+
+    qmlRegisterType<UsdDocument>("UsdBrowser", 1, 0, "UsdDocument");
+    qmlRegisterType<UsdViewportItem>("UsdBrowser", 1, 0, "UsdViewport");
 
     QQmlApplicationEngine engine;
     const QUrl url(QStringLiteral("qrc:/test_qmlcmp/main.qml"));
@@ -18,7 +26,6 @@ int main(int argc, char *argv[])
         },
         Qt::QueuedConnection);
     engine.load(url);
-
 
     InspectorServer inspector(&engine);
     const quint16 port = []() -> quint16 {
