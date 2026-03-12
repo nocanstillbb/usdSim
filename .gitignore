@@ -3,3 +3,7 @@
 build/
 node_modules/
 package-lock.json
+**/*.usd
+!xarm6_with_gripper.usd
+**/*.zip
+**/vcpkg_installed

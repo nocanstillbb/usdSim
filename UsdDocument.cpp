@@ -1,0 +1,370 @@
+#include "UsdDocument.h"
+#include "PrimInfo.h"
+#include <prism/qt/core/hpp/prismModelListProxy.hpp>
+#include <prism/qt/core/hpp/prismTreeModelProxy.hpp>
+#include <prism/qt/core/hpp/prismTreeNodeProxy.hpp>
+
+#include <pxr/usd/usd/stage.h>
+#include <pxr/usd/usd/prim.h>
+#include <pxr/usd/usd/attribute.h>
+#include <pxr/usd/usd/primRange.h>
+#include <pxr/usd/sdf/path.h>
+#include <pxr/usd/sdf/types.h>
+#include <pxr/base/vt/value.h>
+#include <pxr/base/gf/vec2f.h>
+#include <pxr/base/gf/vec3f.h>
+#include <pxr/base/gf/vec4f.h>
+#include <pxr/base/gf/vec2d.h>
+#include <pxr/base/gf/vec3d.h>
+#include <pxr/base/tf/token.h>
+
+#include <QQmlEngine>
+#include <map>
+
+PXR_NAMESPACE_USING_DIRECTIVE
+
+// ---- PrimTreeModel ----
+// prismTreeModelProxy<T>::data() calls field_do(*node, fname) on the node itself,
+// but prismTreeNodeProxy<T> has no PRISM_FIELDS, so we override data() here to
+// use node->get() which properly delegates to the underlying T instance.
+class PrimTreeModel : public prism::qt::core::prismTreeModelProxy<PrimInfo>
+{
+public:
+    using NodeProxy = prism::qt::core::prismTreeNodeProxy<PrimInfo>;
+
+    explicit PrimTreeModel(QObject *p = nullptr)
+        : prism::qt::core::prismTreeModelProxy<PrimInfo>(p) {}
+
+    int columnCount(const QModelIndex & = {}) const override { return 1; }
+
+    QVariant data(const QModelIndex &index, int role) const override {
+        if (!index.isValid()) return {};
+        auto *item = static_cast<NodeProxy *>(index.internalPointer());
+        if (!item) return {};
+        const QByteArray fname = roleNames().value(role);
+        if (fname.isEmpty()) return {};
+        // get() accesses m_instance fields via reflection and converts
+        // std::string → QString etc., which is what QML delegates expect.
+        return const_cast<NodeProxy *>(item)->get(fname);
+    }
+
+    void rebuild(const UsdStageRefPtr &stage) {
+        auto root = std::make_shared<NodeProxy>();
+        if (stage) {
+            std::map<std::string, std::shared_ptr<NodeProxy>> nodeMap;
+            for (const UsdPrim &prim : stage->Traverse()) {
+                auto info = std::make_shared<PrimInfo>();
+                info->name     = prim.GetName().GetString();
+                info->path     = prim.GetPath().GetString();
+                info->typeName = prim.GetTypeName().GetString();
+                info->isActive = prim.IsActive();
+
+                auto node = std::make_shared<NodeProxy>(info);
+                nodeMap[info->path] = node;
+
+                const std::string parentPath = prim.GetPath().GetParentPath().GetString();
+                auto it = nodeMap.find(parentPath);
+                if (it != nodeMap.end())
+                    it->second->appendChild(node);
+                else
+                    root->appendChild(node);
+            }
+        }
+        setRootNode(root);
+    }
+};
+
+// ---- 内部实现结构 ----
+using PrimModel = prism::qt::core::prismModelListProxy<PrimInfo>;
+
+struct UsdDocument::Impl {
+    UsdStageRefPtr  stage;
+    PrimModel      *primModel     = nullptr;
+    PrimTreeModel  *primTreeModel = nullptr;
+    ~Impl() { delete primModel; delete primTreeModel; }
+};
+
+// ---- 工具函数：VtValue → QString ----
+static QString vtValueToString(const VtValue &val)
+{
+    if (val.IsEmpty()) return QString();
+
+    if (val.IsHolding<bool>())         return val.Get<bool>() ? "true" : "false";
+    if (val.IsHolding<int>())          return QString::number(val.Get<int>());
+    if (val.IsHolding<float>())        return QString::number((double)val.Get<float>(), 'g', 6);
+    if (val.IsHolding<double>())       return QString::number(val.Get<double>(), 'g', 10);
+    if (val.IsHolding<std::string>())  return QString::fromStdString(val.Get<std::string>());
+    if (val.IsHolding<TfToken>())      return QString::fromStdString(val.Get<TfToken>().GetString());
+
+    if (val.IsHolding<GfVec2f>()) {
+        auto v = val.Get<GfVec2f>();
+        return QString("(%1, %2)").arg(v[0]).arg(v[1]);
+    }
+    if (val.IsHolding<GfVec3f>()) {
+        auto v = val.Get<GfVec3f>();
+        return QString("(%1, %2, %3)").arg(v[0]).arg(v[1]).arg(v[2]);
+    }
+    if (val.IsHolding<GfVec4f>()) {
+        auto v = val.Get<GfVec4f>();
+        return QString("(%1, %2, %3, %4)").arg(v[0]).arg(v[1]).arg(v[2]).arg(v[3]);
+    }
+    if (val.IsHolding<GfVec3d>()) {
+        auto v = val.Get<GfVec3d>();
+        return QString("(%1, %2, %3)").arg(v[0]).arg(v[1]).arg(v[2]);
+    }
+
+    // 其他类型：转成流输出
+    std::ostringstream oss;
+    oss << val;
+    return QString::fromStdString(oss.str());
+}
+
+// ---- 工具函数：字符串 → 写回 USD 属性 ----
+static bool setAttrFromString(UsdAttribute &attr, const QString &str)
+{
+    const SdfValueTypeName typeName = attr.GetTypeName();
+    const std::string typeStr = typeName.GetAsToken().GetString();
+
+    bool ok = false;
+    if (typeStr == "bool") {
+        attr.Set(str.toLower() == "true" || str == "1");
+        ok = true;
+    } else if (typeStr == "int") {
+        attr.Set(str.toInt(&ok));
+    } else if (typeStr == "float") {
+        attr.Set((float)str.toDouble(&ok));
+    } else if (typeStr == "double") {
+        attr.Set(str.toDouble(&ok));
+    } else if (typeStr == "string") {
+        attr.Set(str.toStdString());
+        ok = true;
+    } else if (typeStr == "token") {
+        attr.Set(TfToken(str.toStdString()));
+        ok = true;
+    } else if (typeStr == "float3" || typeStr == "color3f" || typeStr == "normal3f"
+               || typeStr == "point3f" || typeStr == "vector3f") {
+        // 解析 "(x, y, z)" 格式
+        QString s = str;
+        s.remove('(').remove(')');
+        auto parts = s.split(',');
+        if (parts.size() == 3) {
+            float x = parts[0].trimmed().toFloat(&ok);
+            float y = parts[1].trimmed().toFloat();
+            float z = parts[2].trimmed().toFloat();
+            if (ok) attr.Set(GfVec3f(x, y, z));
+        }
+    } else if (typeStr == "double3" || typeStr == "point3d" || typeStr == "vector3d") {
+        QString s = str;
+        s.remove('(').remove(')');
+        auto parts = s.split(',');
+        if (parts.size() == 3) {
+            double x = parts[0].trimmed().toDouble(&ok);
+            double y = parts[1].trimmed().toDouble();
+            double z = parts[2].trimmed().toDouble();
+            if (ok) attr.Set(GfVec3d(x, y, z));
+        }
+    } else {
+        // 其他类型暂不支持直接编辑
+        return false;
+    }
+    return ok;
+}
+
+// ---- 构造 / 析构 ----
+UsdDocument::UsdDocument(QObject *parent)
+    : QObject(parent), m_impl(std::make_unique<Impl>())
+{
+    m_impl->primModel     = new PrimModel();
+    m_impl->primTreeModel = new PrimTreeModel();
+}
+
+QObject *UsdDocument::primModel() const
+{
+    return m_impl->primModel;
+}
+
+QObject *UsdDocument::primTreeModel() const
+{
+    return m_impl->primTreeModel;
+}
+
+UsdDocument::~UsdDocument() = default;
+
+// ---- 私有方法 ----
+void UsdDocument::setError(const QString &err)
+{
+    m_errorString = err;
+    emit errorStringChanged();
+}
+
+void UsdDocument::refreshPrimPaths()
+{
+    m_primPaths.clear();
+
+    // 重建列表模型
+    m_impl->primModel->pub_beginResetModel();
+    m_impl->primModel->removeAllItemsNotNotify();
+
+    if (m_impl->stage) {
+        for (const UsdPrim &prim : m_impl->stage->Traverse()) {
+            QString path = QString::fromStdString(prim.GetPath().GetString());
+            m_primPaths << path;
+
+            auto info = std::make_shared<PrimInfo>();
+            info->name     = prim.GetName().GetString();
+            info->path     = prim.GetPath().GetString();
+            info->typeName = prim.GetTypeName().GetString();
+            info->isActive = prim.IsActive();
+            m_impl->primModel->appendItemNotNotify(info);
+        }
+    }
+
+    m_impl->primModel->pub_endResetModel();
+
+    // 重建树形模型（prismTreeModelProxy + prismTreeNodeProxy）
+    m_impl->primTreeModel->rebuild(m_impl->stage);
+
+    emit primPathsChanged();
+}
+
+// ---- 公开方法 ----
+bool UsdDocument::open(const QString &path)
+{
+    QString localPath = path;
+    // 去掉 file:// 前缀
+    if (localPath.startsWith("file://"))
+        localPath = localPath.mid(7);
+
+    auto stage = UsdStage::Open(localPath.toStdString());
+    if (!stage) {
+        setError(QString("无法打开文件: %1").arg(localPath));
+        return false;
+    }
+
+    m_impl->stage = stage;
+    m_filePath = localPath;
+    m_isOpen = true;
+    m_errorString.clear();
+
+    emit filePathChanged();
+    emit isOpenChanged();
+    emit errorStringChanged();
+    refreshPrimPaths();
+    return true;
+}
+
+bool UsdDocument::save()
+{
+    if (!m_impl->stage) { setError("没有打开的文件"); return false; }
+    m_impl->stage->Save();
+    return true;
+}
+
+bool UsdDocument::saveAs(const QString &path)
+{
+    if (!m_impl->stage) { setError("没有打开的文件"); return false; }
+    m_impl->stage->Export(path.toStdString());
+    return true;
+}
+
+void UsdDocument::close()
+{
+    m_impl->stage.Reset();
+    m_filePath.clear();
+    m_isOpen = false;
+    refreshPrimPaths();     // clears m_primPaths, resets list+tree models, emits primPathsChanged
+    emit filePathChanged();
+    emit isOpenChanged();
+}
+
+QVariantList UsdDocument::getAttributes(const QString &primPath)
+{
+    QVariantList result;
+    if (!m_impl->stage) return result;
+
+    SdfPath sdfPath(primPath.toStdString());
+    UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
+    if (!prim.IsValid()) return result;
+
+    for (const UsdAttribute &attr : prim.GetAttributes()) {
+        VtValue val;
+        attr.Get(&val);
+
+        QVariantMap entry;
+        entry["name"]     = QString::fromStdString(attr.GetName().GetString());
+        entry["typeName"] = QString::fromStdString(attr.GetTypeName().GetAsToken().GetString());
+        entry["value"]    = vtValueToString(val);
+        entry["isCustom"] = attr.IsCustom();
+        result << entry;
+    }
+    return result;
+}
+
+bool UsdDocument::setAttribute(const QString &primPath,
+                               const QString &attrName,
+                               const QString &value)
+{
+    if (!m_impl->stage) return false;
+
+    SdfPath sdfPath(primPath.toStdString());
+    UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
+    if (!prim.IsValid()) return false;
+
+    UsdAttribute attr = prim.GetAttribute(TfToken(attrName.toStdString()));
+    if (!attr.IsValid()) return false;
+
+    bool ok = setAttrFromString(attr, value);
+    if (ok) emit stageModified();
+    return ok;
+}
+
+QVariantMap UsdDocument::getPrimInfo(const QString &primPath)
+{
+    QVariantMap info;
+    if (!m_impl->stage) return info;
+
+    SdfPath sdfPath(primPath.toStdString());
+    UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
+    if (!prim.IsValid()) return info;
+
+    info["path"]     = primPath;
+    info["typeName"] = QString::fromStdString(prim.GetTypeName().GetString());
+    info["isActive"] = prim.IsActive();
+    info["isModel"]  = prim.IsModel();
+
+    QStringList children;
+    for (const UsdPrim &child : prim.GetChildren())
+        children << QString::fromStdString(child.GetPath().GetString());
+    info["children"] = children;
+
+    return info;
+}
+
+bool UsdDocument::addPrim(const QString &parentPath,
+                          const QString &name,
+                          const QString &typeName)
+{
+    if (!m_impl->stage) return false;
+
+    SdfPath newPath = SdfPath(parentPath.toStdString()).AppendChild(TfToken(name.toStdString()));
+    UsdPrim prim = m_impl->stage->DefinePrim(newPath, TfToken(typeName.toStdString()));
+    if (!prim.IsValid()) return false;
+
+    refreshPrimPaths();
+    return true;
+}
+
+bool UsdDocument::removePrim(const QString &primPath)
+{
+    if (!m_impl->stage) return false;
+
+    bool ok = m_impl->stage->RemovePrim(SdfPath(primPath.toStdString()));
+    if (ok) refreshPrimPaths();
+    return ok;
+}
+
+void *UsdDocument::stagePtr() const
+{
+    // 调用方须包含 <pxr/usd/usd/stage.h> 并用 UsdStageRefPtr 强转
+    return static_cast<void *>(&m_impl->stage);
+}
