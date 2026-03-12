@@ -4,8 +4,10 @@
 #include <QFile>
 #include <QMouseEvent>
 #include <QWheelEvent>
+#include <QSet>
 #include <QtMath>
 #include <rhi/qrhi.h>
+#include <cfloat>
 
 // USD
 #include <pxr/usd/usd/stage.h>
@@ -42,24 +44,33 @@ public:
 private:
     struct RhiMesh {
         QRhiBuffer *vbuf = nullptr;
+        QRhiBuffer *vbufSmooth = nullptr; // smooth normals for outline
         QRhiBuffer *ibuf = nullptr;
         QRhiBuffer *ubuf = nullptr;
         QRhiShaderResourceBindings *srb = nullptr;
+        QRhiBuffer *ibufEdge = nullptr;
+        QRhiBuffer *wireUbuf = nullptr;
+        QRhiShaderResourceBindings *wireSrb = nullptr;
         int indexCount = 0;
+        int edgeCount  = 0;
         QMatrix4x4 transform;
         QVector3D  color;
+        QVector3D  centroid;
     };
 
     void destroyMeshes();
     void uploadMesh(RhiMesh &dst, const MeshData &src, QRhiResourceUpdateBatch *batch);
 
-    QRhiGraphicsPipeline *m_pipeline = nullptr;
+    QRhiGraphicsPipeline *m_pipeline       = nullptr;
+    QRhiGraphicsPipeline *m_wirePipeline   = nullptr;
+    QRhiGraphicsPipeline *m_stencilPipeline = nullptr;
     QShader m_vs, m_fs;
     bool m_initialized = false;
 
     QVector<RhiMesh>  m_meshes;
     QVector<MeshData> m_pending;
     bool m_rebuild = true;
+    QSet<int> m_selectedIndices;
 
     QMatrix4x4 m_view, m_proj;
 };
@@ -339,6 +350,81 @@ static QVector3D colorForMesh(int index)
 }
 
 // ================================================================
+//  Smooth normals: average normals at coincident vertex positions
+// ================================================================
+#include <QHash>
+#include <unordered_map>
+
+struct QuantizedPos {
+    qint32 x, y, z;
+    bool operator==(const QuantizedPos &o) const { return x == o.x && y == o.y && z == o.z; }
+};
+
+namespace std {
+template<> struct hash<QuantizedPos> {
+    size_t operator()(const QuantizedPos &p) const {
+        size_t h = std::hash<qint32>()(p.x);
+        h ^= std::hash<qint32>()(p.y) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<qint32>()(p.z) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+}
+
+static QuantizedPos quantize(float x, float y, float z)
+{
+    // Quantize to ~1e-4 resolution to merge coincident vertices
+    return { qint32(qRound64(double(x) * 10000.0)),
+             qint32(qRound64(double(y) * 10000.0)),
+             qint32(qRound64(double(z) * 10000.0)) };
+}
+
+static void computeSmoothNormals(MeshData &md)
+{
+    const int stride = 6;
+    const int vertCount = md.vertices.size() / stride;
+    const float *src = md.vertices.constData();
+
+    // Pass 1: accumulate normals per unique position (collision-free)
+    struct AccumNorm { float nx = 0, ny = 0, nz = 0; };
+    std::unordered_map<QuantizedPos, AccumNorm> accum;
+    accum.reserve(vertCount);
+
+    for (int i = 0; i < vertCount; ++i) {
+        float px = src[i * stride + 0];
+        float py = src[i * stride + 1];
+        float pz = src[i * stride + 2];
+        float nx = src[i * stride + 3];
+        float ny = src[i * stride + 4];
+        float nz = src[i * stride + 5];
+        QuantizedPos key = quantize(px, py, pz);
+        auto &a = accum[key];
+        a.nx += nx; a.ny += ny; a.nz += nz;
+    }
+
+    // Pass 2: build smoothVertices with averaged normals
+    md.smoothVertices.resize(md.vertices.size());
+    float *dst = md.smoothVertices.data();
+    for (int i = 0; i < vertCount; ++i) {
+        float px = src[i * stride + 0];
+        float py = src[i * stride + 1];
+        float pz = src[i * stride + 2];
+        dst[i * stride + 0] = px;
+        dst[i * stride + 1] = py;
+        dst[i * stride + 2] = pz;
+
+        QuantizedPos key = quantize(px, py, pz);
+        auto &a = accum[key];
+        float nx = a.nx, ny = a.ny, nz = a.nz;
+        float len = sqrtf(nx * nx + ny * ny + nz * nz);
+        if (len > 1e-7f) { nx /= len; ny /= len; nz /= len; }
+        dst[i * stride + 3] = nx;
+        dst[i * stride + 4] = ny;
+        dst[i * stride + 5] = nz;
+    }
+}
+
+// ================================================================
 //  UsdViewportItem (GUI thread)
 // ================================================================
 UsdViewportItem::UsdViewportItem(QQuickItem *parent)
@@ -453,6 +539,28 @@ void UsdViewportItem::buildMeshes()
                 mf[c*4+r] = float(xf[r][c]);
         md.transform = QMatrix4x4(mf);
 
+        // Extract unique edges from triangle indices
+        {
+            QSet<quint64> edgeSet;
+            for (int i = 0; i + 2 < md.indices.size(); i += 3) {
+                quint32 i0 = md.indices[i], i1 = md.indices[i+1], i2 = md.indices[i+2];
+                auto addEdge = [&](quint32 a, quint32 b) {
+                    quint32 lo = qMin(a, b), hi = qMax(a, b);
+                    quint64 key = (quint64(lo) << 32) | hi;
+                    if (!edgeSet.contains(key)) {
+                        edgeSet.insert(key);
+                        md.edges << lo << hi;
+                    }
+                };
+                addEdge(i0, i1);
+                addEdge(i1, i2);
+                addEdge(i2, i0);
+            }
+        }
+
+        md.primPath = QString::fromStdString(prim.GetPath().GetString());
+
+        computeSmoothNormals(md);
         m_meshes << md;
     }
 
@@ -508,6 +616,7 @@ void UsdViewportItem::updateCamera()
 void UsdViewportItem::mousePressEvent(QMouseEvent *e)
 {
     m_lastMouse = e->position();
+    m_pressPos  = e->position();
     m_panning = (e->modifiers() & Qt::AltModifier) || (e->button() == Qt::MiddleButton);
     m_dragging = true;
     e->accept();
@@ -532,6 +641,37 @@ void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
 }
 void UsdViewportItem::mouseReleaseEvent(QMouseEvent *e)
 {
+    // Detect click (no significant drag)
+    if (e->button() == Qt::LeftButton) {
+        QPointF delta = e->position() - m_pressPos;
+        if (delta.manhattanLength() < 3.0) {
+            int hit = pickMesh(e->position());
+            bool changed = false;
+            if (e->modifiers() & Qt::ControlModifier) {
+                // Ctrl+click: toggle hit in selection set
+                if (hit >= 0) {
+                    if (m_selectedMeshes.contains(hit))
+                        m_selectedMeshes.remove(hit);
+                    else
+                        m_selectedMeshes.insert(hit);
+                    changed = true;
+                }
+            } else {
+                // Normal click: single select or clear
+                QSet<int> newSel;
+                if (hit >= 0) newSel.insert(hit);
+                if (newSel != m_selectedMeshes) {
+                    m_selectedMeshes = newSel;
+                    changed = true;
+                }
+            }
+            if (changed) {
+                m_meshDirty = true;
+                update();
+                emit selectedPrimPathsChanged();
+            }
+        }
+    }
     m_dragging = false; m_panning = false; e->accept();
 }
 void UsdViewportItem::wheelEvent(QWheelEvent *e)
@@ -544,6 +684,116 @@ void UsdViewportItem::geometryChange(const QRectF &n, const QRectF &o)
 {
     QQuickRhiItem::geometryChange(n, o);
     updateCamera(); update();
+}
+
+// ================================================================
+//  Selection by prim path
+// ================================================================
+QStringList UsdViewportItem::selectedPrimPaths() const
+{
+    QStringList result;
+    for (int idx : m_selectedMeshes) {
+        if (idx >= 0 && idx < m_meshes.size())
+            result << m_meshes[idx].primPath;
+    }
+    return result;
+}
+
+void UsdViewportItem::selectPrimPath(const QString &path)
+{
+    QSet<int> newSel;
+    if (!path.isEmpty()) {
+        for (int i = 0; i < m_meshes.size(); ++i) {
+            if (m_meshes[i].primPath == path) {
+                newSel.insert(i);
+                break;
+            }
+        }
+    }
+    if (newSel != m_selectedMeshes) {
+        m_selectedMeshes = newSel;
+        m_meshDirty = true;
+        update();
+        emit selectedPrimPathsChanged();
+    }
+}
+
+void UsdViewportItem::togglePrimPath(const QString &path)
+{
+    if (path.isEmpty()) return;
+    int idx = -1;
+    for (int i = 0; i < m_meshes.size(); ++i) {
+        if (m_meshes[i].primPath == path) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0) return;
+    if (m_selectedMeshes.contains(idx))
+        m_selectedMeshes.remove(idx);
+    else
+        m_selectedMeshes.insert(idx);
+    m_meshDirty = true;
+    update();
+    emit selectedPrimPathsChanged();
+}
+
+// ================================================================
+//  CPU Ray Picking (Möller–Trumbore)
+// ================================================================
+int UsdViewportItem::pickMesh(const QPointF &pos) const
+{
+    // Build ray from camera
+    QMatrix4x4 invVP = (m_proj * m_view).inverted();
+    float nx = 2.f * float(pos.x()) / float(width())  - 1.f;
+    float ny = 1.f - 2.f * float(pos.y()) / float(height());
+
+    QVector4D nearH = invVP * QVector4D(nx, ny, -1.f, 1.f);
+    QVector4D farH  = invVP * QVector4D(nx, ny,  1.f, 1.f);
+    QVector3D nearP = nearH.toVector3DAffine();
+    QVector3D farP  = farH.toVector3DAffine();
+    QVector3D rayOrig = nearP;
+    QVector3D rayDir  = (farP - nearP).normalized();
+
+    float bestT = FLT_MAX;
+    int   bestIdx = -1;
+
+    for (int mi = 0; mi < m_meshes.size(); ++mi) {
+        const MeshData &md = m_meshes[mi];
+        // Transform ray to mesh local space
+        QMatrix4x4 invModel = md.transform.inverted();
+        QVector3D orig = invModel.map(rayOrig);
+        QVector3D dir  = invModel.mapVector(rayDir).normalized();
+
+        const float *vd = md.vertices.constData();
+        const int stride = 6; // x,y,z,nx,ny,nz
+
+        for (int i = 0; i + 2 < md.indices.size(); i += 3) {
+            int i0 = md.indices[i], i1 = md.indices[i+1], i2 = md.indices[i+2];
+            QVector3D v0(vd[i0*stride], vd[i0*stride+1], vd[i0*stride+2]);
+            QVector3D v1(vd[i1*stride], vd[i1*stride+1], vd[i1*stride+2]);
+            QVector3D v2(vd[i2*stride], vd[i2*stride+1], vd[i2*stride+2]);
+
+            // Möller–Trumbore intersection
+            QVector3D e1 = v1 - v0, e2 = v2 - v0;
+            QVector3D h = QVector3D::crossProduct(dir, e2);
+            float a = QVector3D::dotProduct(e1, h);
+            if (fabsf(a) < 1e-7f) continue;
+            float f = 1.f / a;
+            QVector3D s = orig - v0;
+            float u = f * QVector3D::dotProduct(s, h);
+            if (u < 0.f || u > 1.f) continue;
+            QVector3D q = QVector3D::crossProduct(s, e1);
+            float v = f * QVector3D::dotProduct(dir, q);
+            if (v < 0.f || u + v > 1.f) continue;
+            float t = f * QVector3D::dotProduct(e2, q);
+            if (t > 1e-5f && t < bestT) {
+                bestT = t;
+                bestIdx = mi;
+            }
+        }
+    }
+    return bestIdx;
 }
 
 // ================================================================
@@ -561,13 +811,18 @@ UsdViewportRenderer::~UsdViewportRenderer()
 {
     destroyMeshes();
     delete m_pipeline;
+    delete m_wirePipeline;
+    delete m_stencilPipeline;
 }
 
 void UsdViewportRenderer::destroyMeshes()
 {
     for (auto &m : m_meshes) {
-        delete m.vbuf; delete m.ibuf;
+        delete m.vbuf; delete m.vbufSmooth;
+        delete m.ibuf;
         delete m.ubuf; delete m.srb;
+        delete m.ibufEdge;
+        delete m.wireUbuf; delete m.wireSrb;
     }
     m_meshes.clear();
 }
@@ -580,10 +835,11 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
     const int isize = src.indices.size()  * sizeof(quint32);
 
     dst.vbuf = rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, vsize);
+    dst.vbufSmooth = rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, vsize);
     dst.ibuf = rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::IndexBuffer,  isize);
     // UBO layout: mvp(64) + model(64) + color(16) + lightDir(16) = 160
     dst.ubuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 160);
-    dst.vbuf->create(); dst.ibuf->create(); dst.ubuf->create();
+    dst.vbuf->create(); dst.vbufSmooth->create(); dst.ibuf->create(); dst.ubuf->create();
 
     dst.srb = rhi->newShaderResourceBindings();
     dst.srb->setBindings({
@@ -595,11 +851,44 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
     dst.srb->create();
 
     batch->uploadStaticBuffer(dst.vbuf, src.vertices.constData());
+    batch->uploadStaticBuffer(dst.vbufSmooth, src.smoothVertices.constData());
     batch->uploadStaticBuffer(dst.ibuf, src.indices.constData());
+
+    // Per-mesh wire UBO + SRB for outline rendering
+    dst.wireUbuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 160);
+    dst.wireUbuf->create();
+    dst.wireSrb = rhi->newShaderResourceBindings();
+    dst.wireSrb->setBindings({
+        QRhiShaderResourceBinding::uniformBuffer(
+            0,
+            QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
+            dst.wireUbuf)
+    });
+    dst.wireSrb->create();
 
     dst.indexCount = src.indices.size();
     dst.transform  = src.transform;
     dst.color      = src.color;
+
+    // Compute centroid from vertices (model space)
+    {
+        int vertCount = src.vertices.size() / 6;
+        QVector3D c(0, 0, 0);
+        const float *v = src.vertices.constData();
+        for (int vi = 0; vi < vertCount; ++vi)
+            c += QVector3D(v[vi*6], v[vi*6+1], v[vi*6+2]);
+        if (vertCount > 0) c /= float(vertCount);
+        dst.centroid = c;
+    }
+
+    // Edge index buffer
+    if (!src.edges.isEmpty()) {
+        const int esize = src.edges.size() * sizeof(quint32);
+        dst.ibufEdge = rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::IndexBuffer, esize);
+        dst.ibufEdge->create();
+        batch->uploadStaticBuffer(dst.ibufEdge, src.edges.constData());
+        dst.edgeCount = src.edges.size();
+    }
 }
 
 void UsdViewportRenderer::initialize(QRhiCommandBuffer *)
@@ -615,6 +904,7 @@ void UsdViewportRenderer::synchronize(QQuickRhiItem *item)
     auto *vp = static_cast<UsdViewportItem *>(item);
     m_view = vp->viewMatrix();
     m_proj = vp->projMatrix();
+    m_selectedIndices = vp->selectedMeshes();
     if (vp->meshDirty()) {
         m_pending = vp->meshes();
         vp->clearMeshDirty();
@@ -630,6 +920,8 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
     if (m_rebuild) {
         destroyMeshes();
         delete m_pipeline; m_pipeline = nullptr;
+        delete m_wirePipeline; m_wirePipeline = nullptr;
+        delete m_stencilPipeline; m_stencilPipeline = nullptr;
         m_meshes.resize(m_pending.size());
         for (int i = 0; i < m_pending.size(); i++)
             uploadMesh(m_meshes[i], m_pending[i], upd);
@@ -643,6 +935,14 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
     }
 
     if (!m_pipeline) {
+        QRhiVertexInputLayout il;
+        il.setBindings({ QRhiVertexInputBinding(6 * sizeof(float)) });
+        il.setAttributes({
+            QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float3, 0),
+            QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float3, 3 * sizeof(float))
+        });
+
+        // Solid pipeline
         m_pipeline = rhi->newGraphicsPipeline();
         QRhiGraphicsPipeline::TargetBlend blend; blend.enable = false;
         m_pipeline->setTargetBlends({blend});
@@ -653,16 +953,72 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             { QRhiShaderStage::Vertex,   m_vs },
             { QRhiShaderStage::Fragment, m_fs }
         });
-        QRhiVertexInputLayout il;
-        il.setBindings({ QRhiVertexInputBinding(6 * sizeof(float)) });
-        il.setAttributes({
-            QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float3, 0),
-            QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float3, 3 * sizeof(float))
-        });
         m_pipeline->setVertexInputLayout(il);
         m_pipeline->setShaderResourceBindings(m_meshes[0].srb);
         m_pipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
         m_pipeline->create();
+
+        // Stencil-write pipeline: render selected mesh to mark stencil=1, no color output
+        m_stencilPipeline = rhi->newGraphicsPipeline();
+        m_stencilPipeline->setTopology(QRhiGraphicsPipeline::Triangles);
+        {
+            QRhiGraphicsPipeline::TargetBlend stBlend;
+            stBlend.enable = false;
+            stBlend.colorWrite = {};  // disable all color writes
+            m_stencilPipeline->setTargetBlends({stBlend});
+        }
+        m_stencilPipeline->setDepthTest(false);  // ignore depth so stencil always writes
+        m_stencilPipeline->setDepthWrite(false);
+        m_stencilPipeline->setCullMode(QRhiGraphicsPipeline::None);
+        m_stencilPipeline->setStencilTest(true);
+        m_stencilPipeline->setStencilWriteMask(0xFF);
+        m_stencilPipeline->setStencilReadMask(0xFF);
+        {
+            QRhiGraphicsPipeline::StencilOpState sop;
+            sop.compareOp   = QRhiGraphicsPipeline::Always;
+            sop.passOp      = QRhiGraphicsPipeline::Replace;
+            sop.failOp      = QRhiGraphicsPipeline::Replace;
+            sop.depthFailOp = QRhiGraphicsPipeline::Replace;
+            m_stencilPipeline->setStencilFront(sop);
+            m_stencilPipeline->setStencilBack(sop);
+        }
+        m_stencilPipeline->setShaderStages({
+            { QRhiShaderStage::Vertex,   m_vs },
+            { QRhiShaderStage::Fragment, m_fs }
+        });
+        m_stencilPipeline->setVertexInputLayout(il);
+        m_stencilPipeline->setShaderResourceBindings(m_meshes[0].wireSrb);
+        m_stencilPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_stencilPipeline->create();
+
+        // Outline pipeline: draw expanded mesh only where stencil != 1
+        m_wirePipeline = rhi->newGraphicsPipeline();
+        m_wirePipeline->setTopology(QRhiGraphicsPipeline::Triangles);
+        QRhiGraphicsPipeline::TargetBlend wireBlend; wireBlend.enable = false;
+        m_wirePipeline->setTargetBlends({wireBlend});
+        m_wirePipeline->setDepthTest(false);
+        m_wirePipeline->setDepthWrite(false);
+        m_wirePipeline->setCullMode(QRhiGraphicsPipeline::None);
+        m_wirePipeline->setStencilTest(true);
+        m_wirePipeline->setStencilWriteMask(0x00);
+        m_wirePipeline->setStencilReadMask(0xFF);
+        {
+            QRhiGraphicsPipeline::StencilOpState sop;
+            sop.compareOp  = QRhiGraphicsPipeline::NotEqual;
+            sop.passOp     = QRhiGraphicsPipeline::Keep;
+            sop.failOp     = QRhiGraphicsPipeline::Keep;
+            sop.depthFailOp = QRhiGraphicsPipeline::Keep;
+            m_wirePipeline->setStencilFront(sop);
+            m_wirePipeline->setStencilBack(sop);
+        }
+        m_wirePipeline->setShaderStages({
+            { QRhiShaderStage::Vertex,   m_vs },
+            { QRhiShaderStage::Fragment, m_fs }
+        });
+        m_wirePipeline->setVertexInputLayout(il);
+        m_wirePipeline->setShaderResourceBindings(m_meshes[0].wireSrb);
+        m_wirePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_wirePipeline->create();
     }
 
     const QSize sz = renderTarget()->pixelSize();
@@ -672,7 +1028,8 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         float mvp[16], model[16], color[4], lightDir[4];
     };
 
-    for (auto &m : m_meshes) {
+    for (int i = 0; i < m_meshes.size(); ++i) {
+        auto &m = m_meshes[i];
         UBuf ub{};
         QMatrix4x4 mvp = rhi->clipSpaceCorrMatrix() * m_proj * m_view * m.transform;
         memcpy(ub.mvp,   mvp.constData(),          64);
@@ -682,6 +1039,19 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         ub.lightDir[0] = lightDir.x(); ub.lightDir[1] = lightDir.y();
         ub.lightDir[2] = lightDir.z(); ub.lightDir[3] = 0.f;
         upd->updateDynamicBuffer(m.ubuf, 0, sizeof(UBuf), &ub);
+
+        // Pre-upload outline UBO for selected meshes (avoids mid-pass updates)
+        if (m_selectedIndices.contains(i)) {
+            UBuf wub{};
+            memcpy(wub.mvp,   mvp.constData(),          64);
+            memcpy(wub.model, m.transform.constData(),   64);
+            wub.color[0] = 1.f; wub.color[1] = 0.78f;
+            wub.color[2] = 0.f; wub.color[3] = 0.f;  // a=0 → flat color mode
+            // lightDir.xyz = centroid (model space), lightDir.w = push amount
+            wub.lightDir[0] = m.centroid.x(); wub.lightDir[1] = m.centroid.y();
+            wub.lightDir[2] = m.centroid.z(); wub.lightDir[3] = 0.004f;
+            upd->updateDynamicBuffer(m.wireUbuf, 0, sizeof(UBuf), &wub);
+        }
     }
 
     cb->beginPass(renderTarget(), QColor(30, 30, 30), {1.f, 0}, upd);
@@ -693,6 +1063,38 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         QRhiCommandBuffer::VertexInput vi(m.vbuf, 0);
         cb->setVertexInput(0, 1, &vi, m.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
         cb->drawIndexed(m.indexCount);
+    }
+
+    // Selection outline for each selected mesh (stencil mask + inverted hull)
+    for (int selIdx : m_selectedIndices) {
+        if (selIdx < 0 || selIdx >= m_meshes.size()) continue;
+        auto &sel = m_meshes[selIdx];
+
+        // Pass 1: Write stencil=1 for this mesh (use original vbuf for exact shape)
+        cb->setGraphicsPipeline(m_stencilPipeline);
+        cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
+        cb->setStencilRef(1);
+        cb->setShaderResources(sel.srb);
+        QRhiCommandBuffer::VertexInput vi1(sel.vbuf, 0);
+        cb->setVertexInput(0, 1, &vi1, sel.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
+        cb->drawIndexed(sel.indexCount);
+
+        // Pass 2: Draw outline where stencil != 1 (use smooth normals for closed outline)
+        cb->setGraphicsPipeline(m_wirePipeline);
+        cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
+        cb->setStencilRef(1);
+        cb->setShaderResources(sel.wireSrb);
+        QRhiCommandBuffer::VertexInput vi2(sel.vbufSmooth, 0);
+        cb->setVertexInput(0, 1, &vi2, sel.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
+        cb->drawIndexed(sel.indexCount);
+
+        // Pass 3: Reset stencil to 0 so it doesn't interfere with next mesh
+        cb->setGraphicsPipeline(m_stencilPipeline);
+        cb->setStencilRef(0);
+        cb->setShaderResources(sel.srb);
+        QRhiCommandBuffer::VertexInput vi3(sel.vbuf, 0);
+        cb->setVertexInput(0, 1, &vi3, sel.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
+        cb->drawIndexed(sel.indexCount);
     }
 
     cb->endPass();

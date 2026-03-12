@@ -4,6 +4,7 @@
 #include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
+#include <QModelIndex>
 #include <memory>
 
 
@@ -49,6 +50,9 @@ public:
                              const QString &name,
                              const QString &typeName);
     Q_INVOKABLE bool removePrim(const QString &primPath);
+
+    // 查找 prim 在树模型中的 QModelIndex（用于 TreeView 展开+选中）
+    Q_INVOKABLE QModelIndex findPrimModelIndex(const QString &path) const;
 
     // 内部使用：返回 USD Stage 指针（调用方须包含 USD 头文件再强转）
     void *stagePtr() const;

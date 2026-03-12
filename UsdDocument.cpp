@@ -48,6 +48,10 @@ public:
         return const_cast<NodeProxy *>(item)->get(fname);
     }
 
+    QModelIndex indexForPath(const QString &path) const {
+        return findPath(QModelIndex(), path);
+    }
+
     void rebuild(const UsdStageRefPtr &stage) {
         auto root = std::make_shared<NodeProxy>();
         if (stage) {
@@ -71,6 +75,21 @@ public:
             }
         }
         setRootNode(root);
+    }
+
+private:
+    QModelIndex findPath(const QModelIndex &parent, const QString &path) const {
+        const int rc = rowCount(parent);
+        for (int r = 0; r < rc; ++r) {
+            QModelIndex idx = index(r, 0, parent);
+            auto *node = static_cast<NodeProxy *>(idx.internalPointer());
+            if (node && node->get("path").toString() == path)
+                return idx;
+            QModelIndex found = findPath(idx, path);
+            if (found.isValid())
+                return found;
+        }
+        return {};
     }
 };
 
@@ -367,4 +386,10 @@ void *UsdDocument::stagePtr() const
 {
     // 调用方须包含 <pxr/usd/usd/stage.h> 并用 UsdStageRefPtr 强转
     return static_cast<void *>(&m_impl->stage);
+}
+
+QModelIndex UsdDocument::findPrimModelIndex(const QString &path) const
+{
+    if (!m_impl->primTreeModel) return {};
+    return m_impl->primTreeModel->indexForPath(path);
 }

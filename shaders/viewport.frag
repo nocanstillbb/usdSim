@@ -18,5 +18,7 @@ void main()
     vec3 L    = normalize(ubo.lightDir.xyz);
     float d   = abs(dot(N, L));
     float lit = 0.2 + 0.8 * d;
-    fragColor = vec4(vColor * lit, 1.0);
+    // color.a >= 0.5 → lit shading; < 0.5 → flat color (wireframe)
+    float useLit = step(0.5, ubo.color.a);
+    fragColor = vec4(vColor * mix(1.0, lit, useLit), 1.0);
 }
