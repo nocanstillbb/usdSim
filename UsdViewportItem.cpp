@@ -265,6 +265,35 @@ static void genPlane(float width, float length,
     idx << 0 << 1 << 2 << 0 << 2 << 3;
 }
 
+// Rotate vertices generated with Y-up to match the USD prim's axis attribute.
+// Generators produce geometry with height along Y; this swizzles to X or Z when needed.
+static void rotateVertsForAxis(QVector<float> &v, const TfToken &axis)
+{
+    if (axis == UsdGeomTokens->y) return; // already Y-up
+    const int stride = 6; // x,y,z,nx,ny,nz
+    float *d = v.data();
+    const int count = v.size() / stride;
+    if (axis == UsdGeomTokens->z) {
+        // Y-up → Z-up: (x,y,z) → (x,-z,y)
+        for (int i = 0; i < count; ++i) {
+            float *p = d + i * stride;
+            float oy = p[1], oz = p[2];
+            p[1] = -oz; p[2] = oy;
+            float ny = p[4], nz = p[5];
+            p[4] = -nz; p[5] = ny;
+        }
+    } else { // "X"
+        // Y-up → X-up: (x,y,z) → (y,x,z) — swap x and y
+        for (int i = 0; i < count; ++i) {
+            float *p = d + i * stride;
+            float ox = p[0], oy = p[1];
+            p[0] = oy; p[1] = ox;
+            float nx = p[3], ny = p[4];
+            p[3] = ny; p[4] = nx;
+        }
+    }
+}
+
 // Triangulate a USD polygon mesh.
 // Normals: per-face flat if not authored, otherwise use authored normals.
 static void genMesh(const UsdGeomMesh &mesh,
@@ -490,25 +519,37 @@ void UsdViewportItem::buildMeshes()
             double s = 2.0; UsdGeomCube(prim).GetSizeAttr().Get(&s);
             genCube(float(s), verts, indices);
         } else if (type == "Cylinder") {
-            double h = 2.0, r = 0.5;
-            UsdGeomCylinder(prim).GetHeightAttr().Get(&h);
-            UsdGeomCylinder(prim).GetRadiusAttr().Get(&r);
+            double h = 2.0, r = 0.5; TfToken axis;
+            UsdGeomCylinder cyl(prim);
+            cyl.GetHeightAttr().Get(&h);
+            cyl.GetRadiusAttr().Get(&r);
+            cyl.GetAxisAttr().Get(&axis);
             genCylinder(float(r), float(h), verts, indices);
+            rotateVertsForAxis(verts, axis);
         } else if (type == "Cone") {
-            double h = 2.0, r = 0.5;
-            UsdGeomCone(prim).GetHeightAttr().Get(&h);
-            UsdGeomCone(prim).GetRadiusAttr().Get(&r);
+            double h = 2.0, r = 0.5; TfToken axis;
+            UsdGeomCone cone(prim);
+            cone.GetHeightAttr().Get(&h);
+            cone.GetRadiusAttr().Get(&r);
+            cone.GetAxisAttr().Get(&axis);
             genCone(float(r), float(h), verts, indices);
+            rotateVertsForAxis(verts, axis);
         } else if (type == "Capsule") {
-            double h = 1.0, r = 0.5;
-            UsdGeomCapsule(prim).GetHeightAttr().Get(&h);
-            UsdGeomCapsule(prim).GetRadiusAttr().Get(&r);
+            double h = 1.0, r = 0.5; TfToken axis;
+            UsdGeomCapsule cap(prim);
+            cap.GetHeightAttr().Get(&h);
+            cap.GetRadiusAttr().Get(&r);
+            cap.GetAxisAttr().Get(&axis);
             genCapsule(float(r), float(h), verts, indices);
+            rotateVertsForAxis(verts, axis);
         } else if (type == "Plane") {
-            double w = 2.0, l = 2.0;
-            UsdGeomPlane(prim).GetWidthAttr().Get(&w);
-            UsdGeomPlane(prim).GetLengthAttr().Get(&l);
+            double w = 2.0, l = 2.0; TfToken axis;
+            UsdGeomPlane plane(prim);
+            plane.GetWidthAttr().Get(&w);
+            plane.GetLengthAttr().Get(&l);
+            plane.GetAxisAttr().Get(&axis);
             genPlane(float(w), float(l), verts, indices);
+            rotateVertsForAxis(verts, axis);
         } else if (type == "Mesh") {
             genMesh(UsdGeomMesh(prim), verts, indices);
         } else {
@@ -572,8 +613,10 @@ void UsdViewportItem::buildMeshes()
         center /= float(m_meshes.size());
         m_target = center;
         m_cameraInitialized = true;
-        updateCamera();
     }
+
+    // Always recalculate camera (m_zUp may have changed on file switch)
+    updateCamera();
 
     m_meshDirty = true;
 }
