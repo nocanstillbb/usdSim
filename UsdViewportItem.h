@@ -34,6 +34,7 @@ public:
 
     QStringList selectedPrimPaths() const;
     Q_INVOKABLE void selectPrimPath(const QString &path);
+    Q_INVOKABLE void selectPrimPaths(const QStringList &paths);
     Q_INVOKABLE void togglePrimPath(const QString &path);
 
     const QVector<MeshData> &meshes() const { return m_meshes; }
@@ -48,6 +49,7 @@ public:
 signals:
     void documentChanged();
     void selectedPrimPathsChanged();
+    void primClicked(const QString &primPath, bool ctrlHeld);
 
 
 protected:
