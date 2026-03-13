@@ -39,6 +39,9 @@ class UsdViewportItem : public QQuickRhiItem
     Q_PROPERTY(UsdDocument* document READ document WRITE setDocument NOTIFY documentChanged)
     Q_PROPERTY(QStringList selectedPrimPaths READ selectedPrimPaths NOTIFY selectedPrimPathsChanged)
     Q_PROPERTY(bool gizmoEnabled READ gizmoEnabled WRITE setGizmoEnabled NOTIFY gizmoEnabledChanged)
+    Q_PROPERTY(QPointF orientLabelX READ orientLabelX NOTIFY orientLabelsChanged)
+    Q_PROPERTY(QPointF orientLabelY READ orientLabelY NOTIFY orientLabelsChanged)
+    Q_PROPERTY(QPointF orientLabelZ READ orientLabelZ NOTIFY orientLabelsChanged)
     QML_ELEMENT
 
 public:
@@ -61,6 +64,12 @@ public:
     QVector3D gizmoWorldPos() const { return m_gizmoWorldPos; }
     const QVector<GizmoMeshData> &gizmoMeshes() const { return m_gizmoMeshes; }
 
+    // Orientation indicator
+    QPointF orientLabelX() const { return m_orientLabels[0]; }
+    QPointF orientLabelY() const { return m_orientLabels[1]; }
+    QPointF orientLabelZ() const { return m_orientLabels[2]; }
+    const QVector<GizmoMeshData> &orientAxesMeshes() const { return m_orientAxesMeshes; }
+
     const QVector<MeshData> &meshes() const { return m_meshes; }
     bool      meshDirty() const  { return m_meshDirty; }
     void      clearMeshDirty()   { m_meshDirty = false; }
@@ -75,6 +84,7 @@ signals:
     void gizmoEnabledChanged();
     void gizmoDragUpdated();
     void gizmoDragFinished(const QString &primPath);
+    void orientLabelsChanged();
 
 protected:
     void mousePressEvent(QMouseEvent *e) override;
@@ -92,8 +102,10 @@ private:
     void updateCamera();
     int  pickMesh(const QPointF &pos) const;
     static void buildGizmoMeshes(QVector<GizmoMeshData> &out);
+    static void buildOrientAxesMeshes(QVector<GizmoMeshData> &out);
     int  pickGizmo(const QPointF &pos) const;
     void updateGizmoPosition();
+    void updateOrientLabels();
 
     UsdDocument       *m_doc = nullptr;
     QVector<MeshData>  m_meshes;
@@ -127,4 +139,8 @@ private:
 
     QMatrix4x4 m_view;
     QMatrix4x4 m_proj;
+
+    // Orientation indicator
+    QVector<GizmoMeshData> m_orientAxesMeshes;
+    QPointF m_orientLabels[3];
 };
