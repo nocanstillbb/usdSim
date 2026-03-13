@@ -1,5 +1,6 @@
 #include "UsdDocument.h"
 #include "PrimInfo.h"
+#include "AttrInfo.h"
 #include <prism/qt/core/hpp/prismModelListProxy.hpp>
 #include <prism/qt/core/hpp/prismTreeModelProxy.hpp>
 #include <prism/qt/core/hpp/prismTreeNodeProxy.hpp>
@@ -95,12 +96,14 @@ private:
 
 // ---- 内部实现结构 ----
 using PrimModel = prism::qt::core::prismModelListProxy<PrimInfo>;
+using AttrModel = prism::qt::core::prismModelListProxy<AttrInfo>;
 
 struct UsdDocument::Impl {
     UsdStageRefPtr  stage;
     PrimModel      *primModel     = nullptr;
     PrimTreeModel  *primTreeModel = nullptr;
-    ~Impl() { delete primModel; delete primTreeModel; }
+    AttrModel      *attrModel     = nullptr;
+    ~Impl() { delete primModel; delete primTreeModel; delete attrModel; }
 };
 
 // ---- 工具函数：VtValue → QString ----
@@ -195,6 +198,7 @@ UsdDocument::UsdDocument(QObject *parent)
 {
     m_impl->primModel     = new PrimModel();
     m_impl->primTreeModel = new PrimTreeModel();
+    m_impl->attrModel     = new AttrModel();
 }
 
 QObject *UsdDocument::primModel() const
@@ -205,6 +209,11 @@ QObject *UsdDocument::primModel() const
 QObject *UsdDocument::primTreeModel() const
 {
     return m_impl->primTreeModel;
+}
+
+QObject *UsdDocument::attrModel() const
+{
+    return m_impl->attrModel;
 }
 
 UsdDocument::~UsdDocument() = default;
@@ -490,6 +499,83 @@ bool UsdDocument::removePrim(const QString &primPath)
     bool ok = m_impl->stage->RemovePrim(SdfPath(primPath.toStdString()));
     if (ok) refreshPrimPaths();
     return ok;
+}
+
+// ---- 属性模型操作 ----
+void UsdDocument::loadAttributes(const QStringList &primPaths)
+{
+    auto *am = m_impl->attrModel;
+    am->pub_beginResetModel();
+    am->removeAllItemsNotNotify();
+
+    if (!m_impl->stage || primPaths.isEmpty()) {
+        am->pub_endResetModel();
+        return;
+    }
+
+    // Fetch attribute list (single or multi-prim common)
+    QVariantList attrs;
+    if (primPaths.size() == 1)
+        attrs = getAttributes(primPaths.first());
+    else
+        attrs = getCommonAttributes(primPaths);
+
+    for (const QVariant &v : attrs) {
+        const QVariantMap m = v.toMap();
+        auto info = std::make_shared<AttrInfo>();
+        info->name     = m[QStringLiteral("name")].toString();
+        info->typeName = m[QStringLiteral("typeName")].toString();
+        info->value    = m[QStringLiteral("value")].toString();
+        info->isCustom = m[QStringLiteral("isCustom")].toBool();
+        am->appendItemNotNotify(info);
+    }
+
+    am->pub_endResetModel();
+}
+
+void UsdDocument::refreshAttributes(const QStringList &primPaths)
+{
+    auto *am = m_impl->attrModel;
+    if (!m_impl->stage || primPaths.isEmpty() || am->length() == 0)
+        return;
+
+    QVariantList attrs;
+    if (primPaths.size() == 1)
+        attrs = getAttributes(primPaths.first());
+    else
+        attrs = getCommonAttributes(primPaths);
+
+    // In-place update existing rows via setData (emits dataChanged, preserves scroll)
+    const int valueRole = am->nameRoles().value("value", -1);
+    if (valueRole < 0) return;
+
+    const int existingCount = am->length();
+    const int updateCount = qMin(existingCount, (int)attrs.size());
+
+    for (int i = 0; i < updateCount; ++i) {
+        const QVariantMap m = attrs[i].toMap();
+        const QString newValue = m[QStringLiteral("value")].toString();
+        am->setData(am->index(i, 0), newValue, valueRole);
+    }
+
+    // Append any new attributes beyond the existing count
+    for (int i = existingCount; i < attrs.size(); ++i) {
+        const QVariantMap m = attrs[i].toMap();
+        auto info = std::make_shared<AttrInfo>();
+        info->name     = m[QStringLiteral("name")].toString();
+        info->typeName = m[QStringLiteral("typeName")].toString();
+        info->value    = m[QStringLiteral("value")].toString();
+        info->isCustom = m[QStringLiteral("isCustom")].toBool();
+        am->appendItem(info);
+    }
+}
+
+void UsdDocument::clearAttributes()
+{
+    auto *am = m_impl->attrModel;
+    am->pub_beginResetModel();
+    am->removeAllItemsNotNotify();
+    am->pub_endResetModel();
 }
 
 void *UsdDocument::stagePtr() const

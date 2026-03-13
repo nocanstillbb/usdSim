@@ -26,6 +26,7 @@ message("22222222")
 qt_add_executable(apptest_qmlcmp
     main.cpp
     PrimInfo.h
+    AttrInfo.h
     UsdDocument.h
     UsdDocument.cpp
     UsdViewportItem.h

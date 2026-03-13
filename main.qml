@@ -13,7 +13,6 @@ ApplicationWindow {
 
     // ── 数据模型 ──────────────────────────────────────────────
     UsdDocument { id: doc }
-    ListModel    { id: attrModel }
 
     property string selectedPrimPath: ""
     property var selectedPrimPaths: []
@@ -22,19 +21,18 @@ ApplicationWindow {
     function loadAttrs(path) {
         root.selectedPrimPath = path
         root.selectedPrimPaths = [path]
-        attrModel.clear()
-        let attrs = doc.getAttributes(path)
-        for (let i = 0; i < attrs.length; i++) attrModel.append(attrs[i])
+        doc.loadAttributes([path])
         let info = doc.getPrimInfo(path)
         primTypeLabel.text = info.typeName || ""
-        statusText.text = path + "  (" + attrs.length + " 个属性)"
+        let count = doc.attrModel.length
+        statusText.text = path + "  (" + count + " 个属性)"
     }
 
     function loadAttrsMulti(paths) {
         if (paths.length === 0) {
             root.selectedPrimPath = ""
             root.selectedPrimPaths = []
-            attrModel.clear()
+            doc.clearAttributes()
             primTypeLabel.text = ""
             statusText.text = "就绪"
             return
@@ -45,25 +43,16 @@ ApplicationWindow {
         }
         root.selectedPrimPath = paths[paths.length - 1]
         root.selectedPrimPaths = paths
-        attrModel.clear()
-        let attrs = doc.getCommonAttributes(paths)
-        for (let i = 0; i < attrs.length; i++) attrModel.append(attrs[i])
+        doc.loadAttributes(paths)
+        let count = doc.attrModel.length
         primTypeLabel.text = paths.length + " 个 Prim"
-        statusText.text = "已选中 " + paths.length + " 个 Prim  (" + attrs.length + " 个共有属性)"
+        statusText.text = "已选中 " + paths.length + " 个 Prim  (" + count + " 个共有属性)"
     }
 
     // Update attribute values in-place without rebuilding the model (preserves scroll)
     function refreshAttrValues(paths) {
-        if (paths.length === 0 || attrModel.count === 0) return
-        let attrs
-        if (paths.length === 1)
-            attrs = doc.getAttributes(paths[0])
-        else
-            attrs = doc.getCommonAttributes(paths)
-        for (let i = 0; i < Math.min(attrs.length, attrModel.count); i++) {
-            if (attrModel.get(i).name === attrs[i].name)
-                attrModel.setProperty(i, "value", attrs[i].value)
-        }
+        if (paths.length === 0) return
+        doc.refreshAttributes(paths)
     }
 
     // ── 工具栏 ───────────────────────────────────────────────
@@ -80,7 +69,7 @@ ApplicationWindow {
                     { label: "测试文件", enabled: true,      action: function(){ doc.open("/home/cnf2025581067/source/repos/test_qmlmcp_server/test_scene.usda") } },
                     { label: "保存",   enabled: doc.isOpen,  action: function(){ doc.save(); statusText.text = "已保存" } },
                     { label: "另存为", enabled: doc.isOpen,  action: function(){ fileOpenOverlay.show(true) } },
-                    { label: "关闭",   enabled: doc.isOpen,  action: function(){ doc.close(); attrModel.clear(); root.selectedPrimPath = "" } }
+                    { label: "关闭",   enabled: doc.isOpen,  action: function(){ doc.close(); doc.clearAttributes(); root.selectedPrimPath = "" } }
                 ]
                 delegate: Button {
                     text: modelData.label
@@ -309,7 +298,7 @@ ApplicationWindow {
                     text: "删除此 Prim"
                     onTriggered: {
                         let ok = doc.removePrim(primCtxMenu.primPath)
-                        if (ok) { attrModel.clear(); root.selectedPrimPath = "" }
+                        if (ok) { doc.clearAttributes(); root.selectedPrimPath = "" }
                         statusText.text = ok ? "已删除" : "删除失败"
                     }
                 }
@@ -388,7 +377,7 @@ ApplicationWindow {
                         sel.clearCurrentIndex()
                         root.selectedPrimPath = ""
                         root.selectedPrimPaths = []
-                        attrModel.clear()
+                        doc.clearAttributes()
                         return
                     }
                     sel.clearSelection()
@@ -431,19 +420,55 @@ ApplicationWindow {
                 color: "#666666"; font.pixelSize: 11
             }
 
-            // 左上角移动工具开关
-            CheckBox {
+            // 左上角变换工具栏
+            Row {
                 visible: doc.isOpen
                 anchors { top: parent.top; left: parent.left; margins: 8 }
-                text: "移动工具"
-                contentItem: Text {
-                    text: parent.text
-                    color: "#cccccc"
-                    font.pixelSize: 12
-                    leftPadding: parent.indicator.width + 4
-                    verticalAlignment: Text.AlignVCenter
+                spacing: 1
+
+                // 半透明背景容器
+                Rectangle {
+                    width: childRow.width + 4
+                    height: childRow.height + 4
+                    radius: 4
+                    color: "#cc1e1e1e"
+
+                    Row {
+                        id: childRow
+                        anchors.centerIn: parent
+                        spacing: 1
+
+                        Repeater {
+                            model: [
+                                { label: "移动", mode: 1 },
+                                { label: "旋转", mode: 2 },
+                                { label: "缩放", mode: 3 }
+                            ]
+                            delegate: Rectangle {
+                                width: 56; height: 24
+                                radius: 3
+                                color: viewport.gizmoMode === modelData.mode
+                                    ? "#0078d4"
+                                    : toolArea.containsMouse ? "#40ffffff" : "transparent"
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData.label
+                                    font.pixelSize: 11
+                                    color: viewport.gizmoMode === modelData.mode ? "#ffffff" : "#aaaaaa"
+                                }
+
+                                MouseArea {
+                                    id: toolArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: viewport.gizmoMode = (viewport.gizmoMode === modelData.mode) ? 0 : modelData.mode
+                                }
+                            }
+                        }
+                    }
                 }
-                onCheckedChanged: viewport.gizmoEnabled = checked
             }
 
             // 左下角坐标轴方向标签
@@ -500,7 +525,7 @@ ApplicationWindow {
                 ListView {
                     id: attrList
                     Layout.fillWidth: true; Layout.fillHeight: true
-                    model: attrModel;
+                    model: doc.attrModel;
                     clip: true
                     ScrollBar.vertical: ScrollBar {}
 
