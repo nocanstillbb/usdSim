@@ -52,6 +52,20 @@ ApplicationWindow {
         statusText.text = "已选中 " + paths.length + " 个 Prim  (" + attrs.length + " 个共有属性)"
     }
 
+    // Update attribute values in-place without rebuilding the model (preserves scroll)
+    function refreshAttrValues(paths) {
+        if (paths.length === 0 || attrModel.count === 0) return
+        let attrs
+        if (paths.length === 1)
+            attrs = doc.getAttributes(paths[0])
+        else
+            attrs = doc.getCommonAttributes(paths)
+        for (let i = 0; i < Math.min(attrs.length, attrModel.count); i++) {
+            if (attrModel.get(i).name === attrs[i].name)
+                attrModel.setProperty(i, "value", attrs[i].value)
+        }
+    }
+
     // ── 工具栏 ───────────────────────────────────────────────
     header: Rectangle {
         height: 44
@@ -312,6 +326,14 @@ ApplicationWindow {
                 anchors.fill: parent
                 document: doc
 
+                onGizmoDragUpdated: {
+                    refreshAttrValues(root.selectedPrimPaths)
+                }
+
+                onGizmoDragFinished: function(primPath) {
+                    refreshAttrValues(root.selectedPrimPaths)
+                }
+
                 onPrimClicked: function(primPath, ctrlHeld) {
                     let paths
                     if (ctrlHeld) {
@@ -407,6 +429,21 @@ ApplicationWindow {
                 anchors { top: parent.top; right: parent.right; margins: 8 }
                 text: "拖拽旋转 · alt+拖拽平移 · 滚轮缩放"
                 color: "#666666"; font.pixelSize: 11
+            }
+
+            // 左上角移动工具开关
+            CheckBox {
+                visible: doc.isOpen
+                anchors { top: parent.top; left: parent.left; margins: 8 }
+                text: "移动工具"
+                contentItem: Text {
+                    text: parent.text
+                    color: "#cccccc"
+                    font.pixelSize: 12
+                    leftPadding: parent.indicator.width + 4
+                    verticalAlignment: Text.AlignVCenter
+                }
+                onCheckedChanged: viewport.gizmoEnabled = checked
             }
         }
 
