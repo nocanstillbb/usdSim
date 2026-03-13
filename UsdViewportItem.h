@@ -18,12 +18,29 @@ struct MeshData {
     QString          primPath;
 };
 
+enum GizmoMode {
+    GizmoModeNone      = 0,
+    GizmoModeTranslate = 1,
+    GizmoModeRotate    = 2,
+    GizmoModeScale     = 3
+};
+
 enum GizmoPartId {
     GizmoNone = -1,
     AxisX = 0, AxisY, AxisZ,
     PlaneXY, PlaneXZ, PlaneYZ,
     Origin,
-    GizmoCount = 7
+    GizmoCount = 7,
+    // Scale gizmo extra parts: separate cube tips for visual sliding
+    ScaleCubeTipX = 7, ScaleCubeTipY, ScaleCubeTipZ,
+    ScaleGizmoPartCount = 10
+};
+
+enum RotatePartId {
+    RotateRingX = 0,
+    RotateRingY = 1,
+    RotateRingZ = 2,
+    RotatePartCount = 3
 };
 
 struct GizmoMeshData {
@@ -38,7 +55,7 @@ class UsdViewportItem : public QQuickRhiItem
     Q_OBJECT
     Q_PROPERTY(UsdDocument* document READ document WRITE setDocument NOTIFY documentChanged)
     Q_PROPERTY(QStringList selectedPrimPaths READ selectedPrimPaths NOTIFY selectedPrimPathsChanged)
-    Q_PROPERTY(bool gizmoEnabled READ gizmoEnabled WRITE setGizmoEnabled NOTIFY gizmoEnabledChanged)
+    Q_PROPERTY(int gizmoMode READ gizmoMode WRITE setGizmoMode NOTIFY gizmoModeChanged)
     Q_PROPERTY(QPointF orientLabelX READ orientLabelX NOTIFY orientLabelsChanged)
     Q_PROPERTY(QPointF orientLabelY READ orientLabelY NOTIFY orientLabelsChanged)
     Q_PROPERTY(QPointF orientLabelZ READ orientLabelZ NOTIFY orientLabelsChanged)
@@ -57,12 +74,13 @@ public:
     Q_INVOKABLE void selectPrimPaths(const QStringList &paths);
     Q_INVOKABLE void togglePrimPath(const QString &path);
 
-    bool gizmoEnabled() const { return m_gizmoEnabled; }
-    void setGizmoEnabled(bool on);
-    bool gizmoVisible() const { return m_gizmoEnabled && !m_selectedMeshes.isEmpty(); }
+    int  gizmoMode() const { return m_gizmoMode; }
+    void setGizmoMode(int mode);
+    bool gizmoVisible() const { return m_gizmoMode != GizmoModeNone && !m_selectedMeshes.isEmpty(); }
     int  gizmoHoveredPart() const { return m_gizmoHoveredPart; }
     QVector3D gizmoWorldPos() const { return m_gizmoWorldPos; }
-    const QVector<GizmoMeshData> &gizmoMeshes() const { return m_gizmoMeshes; }
+    QVector3D scaleCubeFactors() const { return m_scaleCubeFactors; }
+    const QVector<GizmoMeshData> &activeGizmoMeshes() const;
 
     // Orientation indicator
     QPointF orientLabelX() const { return m_orientLabels[0]; }
@@ -81,7 +99,7 @@ signals:
     void documentChanged();
     void selectedPrimPathsChanged();
     void primClicked(const QString &primPath, bool ctrlHeld);
-    void gizmoEnabledChanged();
+    void gizmoModeChanged();
     void gizmoDragUpdated();
     void gizmoDragFinished(const QString &primPath);
     void orientLabelsChanged();
@@ -102,6 +120,8 @@ private:
     void updateCamera();
     int  pickMesh(const QPointF &pos) const;
     static void buildGizmoMeshes(QVector<GizmoMeshData> &out);
+    static void buildRotateGizmoMeshes(QVector<GizmoMeshData> &out);
+    static void buildScaleGizmoMeshes(QVector<GizmoMeshData> &out);
     static void buildOrientAxesMeshes(QVector<GizmoMeshData> &out);
     int  pickGizmo(const QPointF &pos) const;
     void updateGizmoPosition();
@@ -113,8 +133,10 @@ private:
     QSet<int>          m_selectedMeshes;
 
     // Gizmo state
-    bool m_gizmoEnabled = false;
-    QVector<GizmoMeshData> m_gizmoMeshes;
+    int m_gizmoMode = GizmoModeNone;
+    QVector<GizmoMeshData> m_translateGizmoMeshes;
+    QVector<GizmoMeshData> m_rotateGizmoMeshes;
+    QVector<GizmoMeshData> m_scaleGizmoMeshes;
     int m_gizmoHoveredPart = -1;
     int m_gizmoDragPart = -1;
     QVector3D m_gizmoWorldPos;
@@ -123,6 +145,11 @@ private:
     QHash<int, QVector3D> m_gizmoDragStartTranslations;  // world translations at drag start
     QHash<int, QMatrix4x4> m_gizmoDragParentTransforms;  // parent-to-world per mesh
     QHash<int, QVector3D> m_gizmoDragStartLocalTranslates; // xformOp:translate at drag start
+    QHash<int, QVector3D> m_gizmoDragStartRotations;     // xformOp:rotateXYZ at drag start
+    float m_gizmoDragStartAngle = 0.f;                    // initial angle for rotate drag
+    QHash<int, QVector3D> m_gizmoDragStartScales;         // xformOp:scale at drag start
+    float m_gizmoDragStartDistance = 0.f;                  // initial distance for scale drag
+    QVector3D m_scaleCubeFactors{1.f, 1.f, 1.f};            // live scale factors for cube tip sliding
 
     float   m_yaw   = 30.f;
     float   m_pitch = 25.f;

@@ -17,6 +17,7 @@ class UsdDocument : public QObject
     Q_PROPERTY(QString filePath READ filePath NOTIFY filePathChanged)
     Q_PROPERTY(bool isOpen READ isOpen NOTIFY isOpenChanged)
     Q_PROPERTY(QString errorString READ errorString NOTIFY errorStringChanged)
+    Q_PROPERTY(QObject* attrModel READ attrModel CONSTANT)
 
 public:
     explicit UsdDocument(QObject *parent = nullptr);
@@ -28,6 +29,7 @@ public:
     QString filePath() const { return m_filePath; }
     bool isOpen() const { return m_isOpen; }
     QString errorString() const { return m_errorString; }
+    QObject *attrModel() const;
 
     Q_INVOKABLE bool open(const QString &path);
     Q_INVOKABLE bool save();
@@ -58,6 +60,11 @@ public:
                              const QString &name,
                              const QString &typeName);
     Q_INVOKABLE bool removePrim(const QString &primPath);
+
+    // 属性模型操作（全量加载 / 增量刷新 / 清空）
+    Q_INVOKABLE void loadAttributes(const QStringList &primPaths);
+    Q_INVOKABLE void refreshAttributes(const QStringList &primPaths);
+    Q_INVOKABLE void clearAttributes();
 
     // 查找 prim 在树模型中的 QModelIndex（用于 TreeView 展开+选中）
     Q_INVOKABLE QModelIndex findPrimModelIndex(const QString &path) const;

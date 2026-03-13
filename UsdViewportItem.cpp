@@ -91,8 +91,10 @@ private:
     QVector<GizmoMeshData> m_gizmoPending;
     bool m_gizmoRebuild = false;
     bool m_gizmoVisible = false;
+    int  m_gizmoMode = GizmoModeNone;
     QMatrix4x4 m_gizmoTransform;
     int m_gizmoHoveredPart = -1;
+    QVector3D m_scaleCubeFactors{1.f, 1.f, 1.f};
 
     // Orientation indicator
     QVector<RhiGizmoMesh> m_rhiOrientAxes;
@@ -261,7 +263,7 @@ static void genCube(float size, QVector<float> &v, QVector<quint32> &idx)
 {
     float h = size * 0.5f;
     struct Face { float nx,ny,nz; float p[4][3]; };
-    static const Face faces[6] = {
+    const Face faces[6] = {
         { 0, 0, 1, {{-h,-h,h},{h,-h,h},{h,h,h},{-h,h,h}}},
         { 0, 0,-1, {{ h,-h,-h},{-h,-h,-h},{-h,h,-h},{h,h,-h}}},
         {-1, 0, 0, {{-h,-h,-h},{-h,-h,h},{-h,h,h},{-h,h,-h}}},
@@ -364,37 +366,37 @@ void UsdViewportItem::buildGizmoMeshes(QVector<GizmoMeshData> &out)
     out[AxisZ].color          = QVector3D(0.3f, 0.5f, 1.0f);
     out[AxisZ].highlightColor = QVector3D(0.6f, 0.8f, 1.0f);
 
-    // XY plane (normal Z): quad centered in XY square, range [0.35,0.6]
+    // XY plane (normal Z): quad centered in XY square, range [0.5,0.65]
     {
         auto &m = out[PlaneXY];
-        m.vertices << 0.35f << 0.35f << 0.f << 0.f << 0.f << 1.f;
-        m.vertices << 0.6f << 0.35f << 0.f << 0.f << 0.f << 1.f;
-        m.vertices << 0.6f << 0.6f << 0.f << 0.f << 0.f << 1.f;
-        m.vertices << 0.35f << 0.6f << 0.f << 0.f << 0.f << 1.f;
+        m.vertices << 0.5f << 0.5f << 0.f << 0.f << 0.f << 1.f;
+        m.vertices << 0.65f << 0.5f << 0.f << 0.f << 0.f << 1.f;
+        m.vertices << 0.65f << 0.65f << 0.f << 0.f << 0.f << 1.f;
+        m.vertices << 0.5f << 0.65f << 0.f << 0.f << 0.f << 1.f;
         m.indices << 0 << 1 << 2 << 0 << 2 << 3;
         m.color          = QVector3D(0.9f, 0.9f, 0.2f);
         m.highlightColor = QVector3D(1.0f, 1.0f, 0.6f);
     }
 
-    // XZ plane (normal Y): quad centered in XZ square, range [0.35,0.6]
+    // XZ plane (normal Y): quad centered in XZ square, range [0.5,0.65]
     {
         auto &m = out[PlaneXZ];
-        m.vertices << 0.35f << 0.f << 0.35f << 0.f << 1.f << 0.f;
-        m.vertices << 0.6f << 0.f << 0.35f << 0.f << 1.f << 0.f;
-        m.vertices << 0.6f << 0.f << 0.6f << 0.f << 1.f << 0.f;
-        m.vertices << 0.35f << 0.f << 0.6f << 0.f << 1.f << 0.f;
+        m.vertices << 0.5f << 0.f << 0.5f << 0.f << 1.f << 0.f;
+        m.vertices << 0.65f << 0.f << 0.5f << 0.f << 1.f << 0.f;
+        m.vertices << 0.65f << 0.f << 0.65f << 0.f << 1.f << 0.f;
+        m.vertices << 0.5f << 0.f << 0.65f << 0.f << 1.f << 0.f;
         m.indices << 0 << 1 << 2 << 0 << 2 << 3;
         m.color          = QVector3D(0.9f, 0.5f, 0.9f);
         m.highlightColor = QVector3D(1.0f, 0.8f, 1.0f);
     }
 
-    // YZ plane (normal X): quad centered in YZ square, range [0.35,0.6]
+    // YZ plane (normal X): quad centered in YZ square, range [0.5,0.65]
     {
         auto &m = out[PlaneYZ];
-        m.vertices << 0.f << 0.35f << 0.35f << 1.f << 0.f << 0.f;
-        m.vertices << 0.f << 0.6f << 0.35f << 1.f << 0.f << 0.f;
-        m.vertices << 0.f << 0.6f << 0.6f << 1.f << 0.f << 0.f;
-        m.vertices << 0.f << 0.35f << 0.6f << 1.f << 0.f << 0.f;
+        m.vertices << 0.f << 0.5f << 0.5f << 1.f << 0.f << 0.f;
+        m.vertices << 0.f << 0.65f << 0.5f << 1.f << 0.f << 0.f;
+        m.vertices << 0.f << 0.65f << 0.65f << 1.f << 0.f << 0.f;
+        m.vertices << 0.f << 0.5f << 0.65f << 1.f << 0.f << 0.f;
         m.indices << 0 << 1 << 2 << 0 << 2 << 3;
         m.color          = QVector3D(0.2f, 0.9f, 0.9f);
         m.highlightColor = QVector3D(0.6f, 1.0f, 1.0f);
@@ -407,6 +409,220 @@ void UsdViewportItem::buildGizmoMeshes(QVector<GizmoMeshData> &out)
         m.color          = QVector3D(0.9f, 0.9f, 0.9f);
         m.highlightColor = QVector3D(1.0f, 1.0f, 1.0f);
     }
+}
+
+// ================================================================
+//  Torus geometry generator (ring in XZ plane around Y axis)
+// ================================================================
+static void genTorus(float majorR, float minorR,
+                      QVector<float> &v, QVector<quint32> &idx)
+{
+    const int majorSegs = 64, minorSegs = 16;
+    v.clear(); idx.clear();
+    for (int i = 0; i <= majorSegs; i++) {
+        float theta = 2.f * float(M_PI) * i / majorSegs;
+        float ct = cosf(theta), st = sinf(theta);
+        for (int j = 0; j <= minorSegs; j++) {
+            float phi = 2.f * float(M_PI) * j / minorSegs;
+            float cp = cosf(phi), sp = sinf(phi);
+            float x = (majorR + minorR * cp) * ct;
+            float y = minorR * sp;
+            float z = (majorR + minorR * cp) * st;
+            float nx = cp * ct;
+            float ny = sp;
+            float nz = cp * st;
+            v << x << y << z << nx << ny << nz;
+        }
+    }
+    for (int i = 0; i < majorSegs; i++) {
+        for (int j = 0; j < minorSegs; j++) {
+            quint32 a = i * (minorSegs + 1) + j;
+            quint32 b = a + minorSegs + 1;
+            idx << a << b << a + 1 << a + 1 << b << b + 1;
+        }
+    }
+}
+
+// ================================================================
+//  Rotation gizmo: 3 torus rings
+// ================================================================
+void UsdViewportItem::buildRotateGizmoMeshes(QVector<GizmoMeshData> &out)
+{
+    out.resize(RotatePartCount);
+
+    // Y-ring (green): torus in XZ plane around Y axis
+    genTorus(0.9f, 0.02f, out[RotateRingY].vertices, out[RotateRingY].indices);
+    out[RotateRingY].color          = QVector3D(0.2f, 1.0f, 0.2f);
+    out[RotateRingY].highlightColor = QVector3D(0.6f, 1.0f, 0.6f);
+
+    // X-ring (red): swap Y↔X
+    out[RotateRingX].vertices = out[RotateRingY].vertices;
+    out[RotateRingX].indices  = out[RotateRingY].indices;
+    {
+        float *d = out[RotateRingX].vertices.data();
+        int count = out[RotateRingX].vertices.size() / 6;
+        for (int i = 0; i < count; ++i) {
+            float *p = d + i * 6;
+            std::swap(p[0], p[1]); // swap x,y positions
+            std::swap(p[3], p[4]); // swap x,y normals
+        }
+    }
+    out[RotateRingX].color          = QVector3D(1.0f, 0.2f, 0.2f);
+    out[RotateRingX].highlightColor = QVector3D(1.0f, 0.6f, 0.6f);
+
+    // Z-ring (blue): Y→Z (x,y,z) → (x,-z,y)
+    out[RotateRingZ].vertices = out[RotateRingY].vertices;
+    out[RotateRingZ].indices  = out[RotateRingY].indices;
+    {
+        float *d = out[RotateRingZ].vertices.data();
+        int count = out[RotateRingZ].vertices.size() / 6;
+        for (int i = 0; i < count; ++i) {
+            float *p = d + i * 6;
+            float oy = p[1], oz = p[2];
+            p[1] = -oz; p[2] = oy;
+            float ny = p[4], nz = p[5];
+            p[4] = -nz; p[5] = ny;
+        }
+    }
+    out[RotateRingZ].color          = QVector3D(0.3f, 0.5f, 1.0f);
+    out[RotateRingZ].highlightColor = QVector3D(0.6f, 0.8f, 1.0f);
+}
+
+// ================================================================
+//  Scale gizmo: 3 axes (shaft + cube tip), 3 planes, 1 origin cube
+// ================================================================
+void UsdViewportItem::buildScaleGizmoMeshes(QVector<GizmoMeshData> &out)
+{
+    out.resize(ScaleGizmoPartCount);
+
+    // Generate Y-axis shaft only (no cube tip merged)
+    QVector<float> shaftV; QVector<quint32> shaftI;
+    genCylinder(0.015f, 0.8f, shaftV, shaftI, false);
+    shiftVerticesY(shaftV, 0.4f); // 0..0.8
+
+    // Generate cube tip geometry (separate)
+    QVector<float> cubeV; QVector<quint32> cubeI;
+    genCube(0.08f, cubeV, cubeI);
+    shiftVerticesY(cubeV, 0.84f); // cube bottom at 0.8 = shaft top
+
+    // Y-axis shaft
+    out[AxisY].vertices = shaftV;
+    out[AxisY].indices  = shaftI;
+    out[AxisY].color          = QVector3D(0.2f, 1.0f, 0.2f);
+    out[AxisY].highlightColor = QVector3D(0.6f, 1.0f, 0.6f);
+
+    // X-axis shaft: Y→X swap
+    out[AxisX].vertices = shaftV;
+    out[AxisX].indices  = shaftI;
+    {
+        float *d = out[AxisX].vertices.data();
+        int count = out[AxisX].vertices.size() / 6;
+        for (int i = 0; i < count; ++i) {
+            float *p = d + i * 6;
+            std::swap(p[0], p[1]);
+            std::swap(p[3], p[4]);
+        }
+    }
+    out[AxisX].color          = QVector3D(1.0f, 0.2f, 0.2f);
+    out[AxisX].highlightColor = QVector3D(1.0f, 0.6f, 0.6f);
+
+    // Z-axis shaft: Y→Z
+    out[AxisZ].vertices = shaftV;
+    out[AxisZ].indices  = shaftI;
+    {
+        float *d = out[AxisZ].vertices.data();
+        int count = out[AxisZ].vertices.size() / 6;
+        for (int i = 0; i < count; ++i) {
+            float *p = d + i * 6;
+            float oy = p[1], oz = p[2];
+            p[1] = -oz; p[2] = oy;
+            float ny = p[4], nz = p[5];
+            p[4] = -nz; p[5] = ny;
+        }
+    }
+    out[AxisZ].color          = QVector3D(0.3f, 0.5f, 1.0f);
+    out[AxisZ].highlightColor = QVector3D(0.6f, 0.8f, 1.0f);
+
+    // Planes (same as translate gizmo)
+    // XY plane
+    {
+        auto &m = out[PlaneXY];
+        m.vertices << 0.5f << 0.5f << 0.f << 0.f << 0.f << 1.f;
+        m.vertices << 0.65f << 0.5f << 0.f << 0.f << 0.f << 1.f;
+        m.vertices << 0.65f << 0.65f << 0.f << 0.f << 0.f << 1.f;
+        m.vertices << 0.5f << 0.65f << 0.f << 0.f << 0.f << 1.f;
+        m.indices << 0 << 1 << 2 << 0 << 2 << 3;
+        m.color          = QVector3D(0.9f, 0.9f, 0.2f);
+        m.highlightColor = QVector3D(1.0f, 1.0f, 0.6f);
+    }
+    // XZ plane
+    {
+        auto &m = out[PlaneXZ];
+        m.vertices << 0.5f << 0.f << 0.5f << 0.f << 1.f << 0.f;
+        m.vertices << 0.65f << 0.f << 0.5f << 0.f << 1.f << 0.f;
+        m.vertices << 0.65f << 0.f << 0.65f << 0.f << 1.f << 0.f;
+        m.vertices << 0.5f << 0.f << 0.65f << 0.f << 1.f << 0.f;
+        m.indices << 0 << 1 << 2 << 0 << 2 << 3;
+        m.color          = QVector3D(0.9f, 0.5f, 0.9f);
+        m.highlightColor = QVector3D(1.0f, 0.8f, 1.0f);
+    }
+    // YZ plane
+    {
+        auto &m = out[PlaneYZ];
+        m.vertices << 0.f << 0.5f << 0.5f << 1.f << 0.f << 0.f;
+        m.vertices << 0.f << 0.65f << 0.5f << 1.f << 0.f << 0.f;
+        m.vertices << 0.f << 0.65f << 0.65f << 1.f << 0.f << 0.f;
+        m.vertices << 0.f << 0.5f << 0.65f << 1.f << 0.f << 0.f;
+        m.indices << 0 << 1 << 2 << 0 << 2 << 3;
+        m.color          = QVector3D(0.2f, 0.9f, 0.9f);
+        m.highlightColor = QVector3D(0.6f, 1.0f, 1.0f);
+    }
+    // Origin cube (uniform scale)
+    {
+        auto &m = out[Origin];
+        genCube(0.12f, m.vertices, m.indices);
+        m.color          = QVector3D(0.9f, 0.9f, 0.9f);
+        m.highlightColor = QVector3D(1.0f, 1.0f, 1.0f);
+    }
+
+    // Cube tips as separate parts (for sliding during drag)
+    // Y-axis cube tip
+    out[ScaleCubeTipY].vertices = cubeV;
+    out[ScaleCubeTipY].indices  = cubeI;
+    out[ScaleCubeTipY].color          = QVector3D(0.2f, 1.0f, 0.2f);
+    out[ScaleCubeTipY].highlightColor = QVector3D(0.6f, 1.0f, 0.6f);
+
+    // X-axis cube tip: Y→X swap
+    out[ScaleCubeTipX].vertices = cubeV;
+    out[ScaleCubeTipX].indices  = cubeI;
+    {
+        float *d = out[ScaleCubeTipX].vertices.data();
+        int count = out[ScaleCubeTipX].vertices.size() / 6;
+        for (int i = 0; i < count; ++i) {
+            float *p = d + i * 6;
+            std::swap(p[0], p[1]);
+            std::swap(p[3], p[4]);
+        }
+    }
+    out[ScaleCubeTipX].color          = QVector3D(1.0f, 0.2f, 0.2f);
+    out[ScaleCubeTipX].highlightColor = QVector3D(1.0f, 0.6f, 0.6f);
+
+    // Z-axis cube tip: Y→Z
+    out[ScaleCubeTipZ].vertices = cubeV;
+    out[ScaleCubeTipZ].indices  = cubeI;
+    {
+        float *d = out[ScaleCubeTipZ].vertices.data();
+        int count = out[ScaleCubeTipZ].vertices.size() / 6;
+        for (int i = 0; i < count; ++i) {
+            float *p = d + i * 6;
+            float oy = p[1], oz = p[2];
+            p[1] = -oz; p[2] = oy;
+            float ny = p[4], nz = p[5];
+            p[4] = -nz; p[5] = ny;
+        }
+    }
+    out[ScaleCubeTipZ].color          = QVector3D(0.3f, 0.5f, 1.0f);
+    out[ScaleCubeTipZ].highlightColor = QVector3D(0.6f, 0.8f, 1.0f);
 }
 
 // ================================================================
@@ -661,7 +877,9 @@ UsdViewportItem::UsdViewportItem(QQuickItem *parent)
 {
     setAcceptedMouseButtons(Qt::LeftButton | Qt::RightButton | Qt::MiddleButton);
     setAcceptHoverEvents(true);
-    buildGizmoMeshes(m_gizmoMeshes);
+    buildGizmoMeshes(m_translateGizmoMeshes);
+    buildRotateGizmoMeshes(m_rotateGizmoMeshes);
+    buildScaleGizmoMeshes(m_scaleGizmoMeshes);
     buildOrientAxesMeshes(m_orientAxesMeshes);
     updateCamera();
 }
@@ -692,6 +910,12 @@ void UsdViewportItem::onDocumentChanged()
     // Skip rebuild during gizmo drag — we update transforms directly
     if (m_gizmoDragPart >= 0) return;
     buildMeshes();
+    // Reset gizmo when file closed
+    if (!m_doc || !m_doc->isOpen()) {
+        setGizmoMode(GizmoModeNone);
+        m_selectedMeshes.clear();
+        emit selectedPrimPathsChanged();
+    }
     update();
 }
 
@@ -908,21 +1132,32 @@ void UsdViewportItem::updateOrientLabels()
 // ================================================================
 //  Gizmo helpers
 // ================================================================
-void UsdViewportItem::setGizmoEnabled(bool on)
+void UsdViewportItem::setGizmoMode(int mode)
 {
-    if (m_gizmoEnabled == on) return;
-    m_gizmoEnabled = on;
+    if (m_gizmoMode == mode) return;
+    m_gizmoMode = mode;
     m_gizmoHoveredPart = -1;
     m_gizmoDragPart = -1;
-    if (on) updateGizmoPosition();
+    if (mode != GizmoModeNone) updateGizmoPosition();
     m_meshDirty = true;
     update();
-    emit gizmoEnabledChanged();
+    emit gizmoModeChanged();
+}
+
+const QVector<GizmoMeshData> &UsdViewportItem::activeGizmoMeshes() const
+{
+    static const QVector<GizmoMeshData> empty;
+    switch (m_gizmoMode) {
+    case GizmoModeTranslate: return m_translateGizmoMeshes;
+    case GizmoModeRotate:    return m_rotateGizmoMeshes;
+    case GizmoModeScale:     return m_scaleGizmoMeshes;
+    default:                 return empty;
+    }
 }
 
 void UsdViewportItem::updateGizmoPosition()
 {
-    if (!m_gizmoEnabled || m_selectedMeshes.isEmpty()) return;
+    if (m_gizmoMode == GizmoModeNone || m_selectedMeshes.isEmpty()) return;
     int anchorIdx = -1;
     for (int idx : m_selectedMeshes)
         if (idx >= 0 && idx < m_meshes.size())
@@ -935,7 +1170,9 @@ void UsdViewportItem::updateGizmoPosition()
 
 int UsdViewportItem::pickGizmo(const QPointF &pos) const
 {
-    if (!m_gizmoEnabled || m_selectedMeshes.isEmpty()) return -1;
+    if (m_gizmoMode == GizmoModeNone || m_selectedMeshes.isEmpty()) return -1;
+
+    const auto &meshes = activeGizmoMeshes();
 
     QMatrix4x4 invVP = (m_proj * m_view).inverted();
     float nx = 2.f * float(pos.x()) / float(width())  - 1.f;
@@ -948,7 +1185,7 @@ int UsdViewportItem::pickGizmo(const QPointF &pos) const
 
     // Compute gizmo transform (constant screen size)
     float dist = (m_gizmoWorldPos - m_cameraEye).length();
-    float scale = dist * 0.12f;
+    float scale = dist * 0.08f;
     QMatrix4x4 gizmoXf;
     gizmoXf.translate(m_gizmoWorldPos);
     gizmoXf.scale(scale);
@@ -960,8 +1197,8 @@ int UsdViewportItem::pickGizmo(const QPointF &pos) const
     float bestT = FLT_MAX;
     int bestPart = -1;
 
-    for (int pi = 0; pi < m_gizmoMeshes.size(); ++pi) {
-        const auto &gm = m_gizmoMeshes[pi];
+    for (int pi = 0; pi < meshes.size(); ++pi) {
+        const auto &gm = meshes[pi];
         const float *vd = gm.vertices.constData();
         const int stride = 6;
 
@@ -994,8 +1231,11 @@ int UsdViewportItem::pickGizmo(const QPointF &pos) const
 
 void UsdViewportItem::hoverMoveEvent(QHoverEvent *e)
 {
-    if (m_gizmoEnabled && !m_selectedMeshes.isEmpty()) {
+    if (m_gizmoMode != GizmoModeNone && !m_selectedMeshes.isEmpty()) {
         int newHover = pickGizmo(e->position());
+        // Map scale cube tip picks to their axis
+        if (m_gizmoMode == GizmoModeScale && newHover >= GizmoCount)
+            newHover = newHover - GizmoCount; // ScaleCubeTipX(7)->AxisX(0), etc.
         if (newHover != m_gizmoHoveredPart) {
             m_gizmoHoveredPart = newHover;
             m_meshDirty = true;
@@ -1048,19 +1288,26 @@ void UsdViewportItem::mousePressEvent(QMouseEvent *e)
     m_pressPos  = e->position();
 
     // Gizmo pick takes priority
-    if (m_gizmoEnabled && !m_selectedMeshes.isEmpty() && e->button() == Qt::LeftButton) {
+    if (m_gizmoMode != GizmoModeNone && !m_selectedMeshes.isEmpty() && e->button() == Qt::LeftButton) {
         int hit = pickGizmo(e->position());
+        // Map scale cube tip picks to their axis
+        if (m_gizmoMode == GizmoModeScale && hit >= GizmoCount)
+            hit = hit - GizmoCount;
         if (hit >= 0) {
             m_gizmoDragPart = hit;
             m_gizmoHoveredPart = hit;
             m_gizmoDragStartPos = m_gizmoWorldPos;
             m_gizmoDragStartMouse = e->position();
-            // Save start translations for all selected meshes
+            // Clear all drag state
             m_gizmoDragStartTranslations.clear();
             m_gizmoDragParentTransforms.clear();
             m_gizmoDragStartLocalTranslates.clear();
+            m_gizmoDragStartRotations.clear();
+            m_gizmoDragStartScales.clear();
+            m_gizmoDragStartAngle = 0.f;
+            m_gizmoDragStartDistance = 0.f;
 
-            // Read parent transforms and local translates from USD
+            // Read parent transforms and local attributes from USD
             auto *stageRef = m_doc ? static_cast<UsdStageRefPtr *>(m_doc->stagePtr()) : nullptr;
             UsdGeomXformCache xfCache;
 
@@ -1081,21 +1328,82 @@ void UsdViewportItem::mousePressEvent(QMouseEvent *e)
                                 mf[c * 4 + r] = float(parentGf[r][c]);
                         m_gizmoDragParentTransforms[idx] = QMatrix4x4(mf);
 
-                        // Current local xformOp:translate (handle both float3 and double3)
-                        UsdAttribute attr = prim.GetAttribute(TfToken("xformOp:translate"));
-                        QVector3D localT(0, 0, 0);
-                        if (attr.IsValid()) {
-                            GfVec3f vf;
-                            GfVec3d vd;
-                            if (attr.Get(&vf))
-                                localT = QVector3D(vf[0], vf[1], vf[2]);
-                            else if (attr.Get(&vd))
-                                localT = QVector3D(float(vd[0]), float(vd[1]), float(vd[2]));
+                        // Helper to read a vec3 attribute (float3 or double3)
+                        auto readVec3Attr = [&](const char *name) -> QVector3D {
+                            UsdAttribute attr = prim.GetAttribute(TfToken(name));
+                            QVector3D v(0, 0, 0);
+                            if (attr.IsValid()) {
+                                GfVec3f vf; GfVec3d vd;
+                                if (attr.Get(&vf))
+                                    v = QVector3D(vf[0], vf[1], vf[2]);
+                                else if (attr.Get(&vd))
+                                    v = QVector3D(float(vd[0]), float(vd[1]), float(vd[2]));
+                            }
+                            return v;
+                        };
+
+                        if (m_gizmoMode == GizmoModeTranslate) {
+                            m_gizmoDragStartLocalTranslates[idx] = readVec3Attr("xformOp:translate");
+                        } else if (m_gizmoMode == GizmoModeRotate) {
+                            // Ensure rotateXYZ op exists
+                            UsdGeomXformable xformable(prim);
+                            UsdAttribute rotAttr = prim.GetAttribute(TfToken("xformOp:rotateXYZ"));
+                            if (!rotAttr.IsValid()) {
+                                xformable.AddRotateXYZOp();
+                                // Set default value
+                                rotAttr = prim.GetAttribute(TfToken("xformOp:rotateXYZ"));
+                                if (rotAttr.IsValid())
+                                    rotAttr.Set(GfVec3f(0, 0, 0));
+                            }
+                            m_gizmoDragStartRotations[idx] = readVec3Attr("xformOp:rotateXYZ");
+                        } else if (m_gizmoMode == GizmoModeScale) {
+                            // Ensure scale op exists
+                            UsdGeomXformable xformable(prim);
+                            UsdAttribute scaleAttr = prim.GetAttribute(TfToken("xformOp:scale"));
+                            if (!scaleAttr.IsValid()) {
+                                xformable.AddScaleOp();
+                                scaleAttr = prim.GetAttribute(TfToken("xformOp:scale"));
+                                if (scaleAttr.IsValid())
+                                    scaleAttr.Set(GfVec3f(1, 1, 1));
+                            }
+                            m_gizmoDragStartScales[idx] = readVec3Attr("xformOp:scale");
                         }
-                        m_gizmoDragStartLocalTranslates[idx] = localT;
                     }
                 }
             }
+
+            // Compute start angle/distance for rotate/scale
+            if (m_gizmoMode == GizmoModeRotate || m_gizmoMode == GizmoModeScale) {
+                QMatrix4x4 invVP = (m_proj * m_view).inverted();
+                float w = float(width()), h = float(height());
+                QVector3D rayO, rayD;
+                rayD = buildRay(invVP, float(e->position().x()), float(e->position().y()), w, h, rayO);
+
+                if (m_gizmoMode == GizmoModeRotate) {
+                    // Project mouse onto rotation plane, compute angle
+                    static const QVector3D planeNormals[] = { {1,0,0}, {0,1,0}, {0,0,1} };
+                    QVector3D planeN = planeNormals[hit]; // RotateRingX/Y/Z = 0/1/2
+                    QVector3D hitPt = rayPlaneHit(rayO, rayD, m_gizmoWorldPos, planeN);
+                    QVector3D fromCenter = hitPt - m_gizmoWorldPos;
+                    // Compute angle in the plane using two perpendicular axes
+                    // For X-ring (normal X): use Y,Z. For Y-ring (normal Y): use X,Z. For Z-ring (normal Z): use X,Y
+                    float angle = 0.f;
+                    if (hit == RotateRingX)
+                        angle = atan2f(fromCenter.z(), fromCenter.y());
+                    else if (hit == RotateRingY)
+                        angle = atan2f(fromCenter.x(), fromCenter.z());
+                    else // RotateRingZ
+                        angle = atan2f(fromCenter.y(), fromCenter.x());
+                    m_gizmoDragStartAngle = angle;
+                } else {
+                    // Scale: compute distance from gizmo center to mouse hit
+                    QVector3D planeN = (m_cameraEye - m_gizmoWorldPos).normalized();
+                    QVector3D hitPt = rayPlaneHit(rayO, rayD, m_gizmoWorldPos, planeN);
+                    m_gizmoDragStartDistance = (hitPt - m_gizmoWorldPos).length();
+                    if (m_gizmoDragStartDistance < 1e-5f) m_gizmoDragStartDistance = 1.f;
+                }
+            }
+
             e->accept();
             return;
         }
@@ -1117,64 +1425,203 @@ void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
         QVector3D curDir  = buildRay(invVP, float(e->position().x()), float(e->position().y()), w, h, curOrig);
         QVector3D startDir = buildRay(invVP, float(m_gizmoDragStartMouse.x()), float(m_gizmoDragStartMouse.y()), w, h, startOrig);
 
-        QVector3D delta(0, 0, 0);
         QVector3D origin = m_gizmoDragStartPos;
 
-        if (m_gizmoDragPart <= AxisZ) {
-            // Axis constraint
-            static const QVector3D axes[] = { {1,0,0}, {0,1,0}, {0,0,1} };
-            QVector3D axis = axes[m_gizmoDragPart];
-            float tCurr  = closestParamOnLine(origin, axis, curOrig, curDir);
-            float tStart = closestParamOnLine(origin, axis, startOrig, startDir);
-            delta = axis * (tCurr - tStart);
-        } else if (m_gizmoDragPart <= PlaneYZ) {
-            // Plane constraint
-            static const QVector3D normals[] = { {0,0,1}, {0,1,0}, {1,0,0} };
-            QVector3D planeN = normals[m_gizmoDragPart - PlaneXY];
-            QVector3D hitCurr  = rayPlaneHit(curOrig, curDir, origin, planeN);
-            QVector3D hitStart = rayPlaneHit(startOrig, startDir, origin, planeN);
-            delta = hitCurr - hitStart;
-        } else {
-            // Origin: view plane
-            QVector3D planeN = (m_cameraEye - origin).normalized();
-            QVector3D hitCurr  = rayPlaneHit(curOrig, curDir, origin, planeN);
-            QVector3D hitStart = rayPlaneHit(startOrig, startDir, origin, planeN);
-            delta = hitCurr - hitStart;
-        }
-
-        // Apply delta to all selected meshes (visual: world transform)
-        for (auto it = m_gizmoDragStartTranslations.constBegin();
-             it != m_gizmoDragStartTranslations.constEnd(); ++it) {
-            int idx = it.key();
-            if (idx >= 0 && idx < m_meshes.size()) {
-                QVector3D newT = it.value() + delta;
-                m_meshes[idx].transform(0, 3) = newT.x();
-                m_meshes[idx].transform(1, 3) = newT.y();
-                m_meshes[idx].transform(2, 3) = newT.z();
+        if (m_gizmoMode == GizmoModeTranslate) {
+            // --- Translate drag ---
+            QVector3D delta(0, 0, 0);
+            if (m_gizmoDragPart <= AxisZ) {
+                static const QVector3D axes[] = { {1,0,0}, {0,1,0}, {0,0,1} };
+                QVector3D axis = axes[m_gizmoDragPart];
+                float tCurr  = closestParamOnLine(origin, axis, curOrig, curDir);
+                float tStart = closestParamOnLine(origin, axis, startOrig, startDir);
+                delta = axis * (tCurr - tStart);
+            } else if (m_gizmoDragPart <= PlaneYZ) {
+                static const QVector3D normals[] = { {0,0,1}, {0,1,0}, {1,0,0} };
+                QVector3D planeN = normals[m_gizmoDragPart - PlaneXY];
+                QVector3D hitCurr  = rayPlaneHit(curOrig, curDir, origin, planeN);
+                QVector3D hitStart = rayPlaneHit(startOrig, startDir, origin, planeN);
+                delta = hitCurr - hitStart;
+            } else {
+                QVector3D planeN = (m_cameraEye - origin).normalized();
+                QVector3D hitCurr  = rayPlaneHit(curOrig, curDir, origin, planeN);
+                QVector3D hitStart = rayPlaneHit(startOrig, startDir, origin, planeN);
+                delta = hitCurr - hitStart;
             }
-        }
-        m_gizmoWorldPos = m_gizmoDragStartPos + delta;
 
-        // Write correct local translate to USD (for live panel updates)
-        if (m_doc) {
-            for (auto it = m_gizmoDragStartLocalTranslates.constBegin();
-                 it != m_gizmoDragStartLocalTranslates.constEnd(); ++it) {
+            // Apply delta to all selected meshes (visual)
+            for (auto it = m_gizmoDragStartTranslations.constBegin();
+                 it != m_gizmoDragStartTranslations.constEnd(); ++it) {
                 int idx = it.key();
-                if (idx < 0 || idx >= m_meshes.size()) continue;
-                // Convert world delta to local space via parent transform
-                QVector3D localDelta = delta;
-                if (m_gizmoDragParentTransforms.contains(idx)) {
-                    QMatrix4x4 parentInv = m_gizmoDragParentTransforms[idx].inverted();
-                    localDelta = parentInv.mapVector(delta);
+                if (idx >= 0 && idx < m_meshes.size()) {
+                    QVector3D newT = it.value() + delta;
+                    m_meshes[idx].transform(0, 3) = newT.x();
+                    m_meshes[idx].transform(1, 3) = newT.y();
+                    m_meshes[idx].transform(2, 3) = newT.z();
                 }
-                QVector3D newLocal = it.value() + localDelta;
-                QString val = QString("(%1, %2, %3)")
-                    .arg(double(newLocal.x())).arg(double(newLocal.y())).arg(double(newLocal.z()));
-                m_doc->setAttribute(m_meshes[idx].primPath,
-                                    QStringLiteral("xformOp:translate"), val);
             }
-            // Notify QML to refresh attribute values in-place (no model rebuild)
-            emit gizmoDragUpdated();
+            m_gizmoWorldPos = m_gizmoDragStartPos + delta;
+
+            // Write to USD
+            if (m_doc) {
+                for (auto it = m_gizmoDragStartLocalTranslates.constBegin();
+                     it != m_gizmoDragStartLocalTranslates.constEnd(); ++it) {
+                    int idx = it.key();
+                    if (idx < 0 || idx >= m_meshes.size()) continue;
+                    QVector3D localDelta = delta;
+                    if (m_gizmoDragParentTransforms.contains(idx)) {
+                        QMatrix4x4 parentInv = m_gizmoDragParentTransforms[idx].inverted();
+                        localDelta = parentInv.mapVector(delta);
+                    }
+                    QVector3D newLocal = it.value() + localDelta;
+                    QString val = QString("(%1, %2, %3)")
+                        .arg(double(newLocal.x())).arg(double(newLocal.y())).arg(double(newLocal.z()));
+                    m_doc->setAttribute(m_meshes[idx].primPath,
+                                        QStringLiteral("xformOp:translate"), val);
+                }
+                emit gizmoDragUpdated();
+            }
+
+        } else if (m_gizmoMode == GizmoModeRotate) {
+            // --- Rotate drag ---
+            static const QVector3D planeNormals[] = { {1,0,0}, {0,1,0}, {0,0,1} };
+            QVector3D planeN = planeNormals[m_gizmoDragPart]; // RotateRingX/Y/Z = 0/1/2
+
+            QVector3D hitPt = rayPlaneHit(curOrig, curDir, origin, planeN);
+            QVector3D fromCenter = hitPt - origin;
+
+            float curAngle = 0.f;
+            if (m_gizmoDragPart == RotateRingX)
+                curAngle = atan2f(fromCenter.z(), fromCenter.y());
+            else if (m_gizmoDragPart == RotateRingY)
+                curAngle = atan2f(fromCenter.x(), fromCenter.z());
+            else // RotateRingZ
+                curAngle = atan2f(fromCenter.y(), fromCenter.x());
+
+            float angleDelta = qRadiansToDegrees(curAngle - m_gizmoDragStartAngle);
+
+            // Write to USD and update mesh transforms from xformCache
+            if (m_doc) {
+                auto *stageRef = static_cast<UsdStageRefPtr *>(m_doc->stagePtr());
+                for (auto it = m_gizmoDragStartRotations.constBegin();
+                     it != m_gizmoDragStartRotations.constEnd(); ++it) {
+                    int idx = it.key();
+                    if (idx < 0 || idx >= m_meshes.size()) continue;
+                    QVector3D startRot = it.value();
+                    QVector3D newRot = startRot;
+                    if (m_gizmoDragPart == RotateRingX) newRot.setX(startRot.x() + angleDelta);
+                    else if (m_gizmoDragPart == RotateRingY) newRot.setY(startRot.y() + angleDelta);
+                    else newRot.setZ(startRot.z() + angleDelta);
+
+                    QString val = QString("(%1, %2, %3)")
+                        .arg(double(newRot.x())).arg(double(newRot.y())).arg(double(newRot.z()));
+                    m_doc->setAttribute(m_meshes[idx].primPath,
+                                        QStringLiteral("xformOp:rotateXYZ"), val);
+
+                    // Update visual transform from USD
+                    if (stageRef && *stageRef) {
+                        UsdGeomXformCache xfCache;
+                        SdfPath sdfPath(m_meshes[idx].primPath.toStdString());
+                        UsdPrim prim = (*stageRef)->GetPrimAtPath(sdfPath);
+                        if (prim.IsValid()) {
+                            GfMatrix4d xf = xfCache.GetLocalToWorldTransform(prim);
+                            float mf[16];
+                            for (int r = 0; r < 4; r++)
+                                for (int c = 0; c < 4; c++)
+                                    mf[c * 4 + r] = float(xf[r][c]);
+                            m_meshes[idx].transform = QMatrix4x4(mf);
+                        }
+                    }
+                }
+                emit gizmoDragUpdated();
+            }
+
+        } else if (m_gizmoMode == GizmoModeScale) {
+            // --- Scale drag ---
+            // Use viewport 2D pixel delta: right/up = scale up, left/down = scale down.
+            QPointF delta = e->position() - m_gizmoDragStartMouse;
+            // Combine horizontal (right=+) and vertical (up=-, Qt Y is down) contributions
+            float pixelDelta = float(delta.x() - delta.y()) * 0.5f;
+            // Sensitivity: 200 pixels = 1x scale change (so 200px right → scale 2.0)
+            float scaleFactor = 1.f + pixelDelta / 200.f;
+
+            // Clamp scale factor
+            scaleFactor = qBound(-100.f, scaleFactor, 100.f);
+
+            // Update cube tip slide factors for visual feedback
+            m_scaleCubeFactors = QVector3D(1.f, 1.f, 1.f);
+            if (m_gizmoDragPart == AxisX)
+                m_scaleCubeFactors.setX(scaleFactor);
+            else if (m_gizmoDragPart == AxisY)
+                m_scaleCubeFactors.setY(scaleFactor);
+            else if (m_gizmoDragPart == AxisZ)
+                m_scaleCubeFactors.setZ(scaleFactor);
+            else if (m_gizmoDragPart == PlaneXY) {
+                m_scaleCubeFactors.setX(scaleFactor);
+                m_scaleCubeFactors.setY(scaleFactor);
+            } else if (m_gizmoDragPart == PlaneXZ) {
+                m_scaleCubeFactors.setX(scaleFactor);
+                m_scaleCubeFactors.setZ(scaleFactor);
+            } else if (m_gizmoDragPart == PlaneYZ) {
+                m_scaleCubeFactors.setY(scaleFactor);
+                m_scaleCubeFactors.setZ(scaleFactor);
+            } else {
+                // Origin: uniform
+                m_scaleCubeFactors = QVector3D(scaleFactor, scaleFactor, scaleFactor);
+            }
+
+            // Write to USD and update mesh transforms
+            if (m_doc) {
+                auto *stageRef = static_cast<UsdStageRefPtr *>(m_doc->stagePtr());
+                for (auto it = m_gizmoDragStartScales.constBegin();
+                     it != m_gizmoDragStartScales.constEnd(); ++it) {
+                    int idx = it.key();
+                    if (idx < 0 || idx >= m_meshes.size()) continue;
+                    QVector3D startScale = it.value();
+                    QVector3D newScale = startScale;
+
+                    if (m_gizmoDragPart == AxisX)
+                        newScale.setX(startScale.x() * scaleFactor);
+                    else if (m_gizmoDragPart == AxisY)
+                        newScale.setY(startScale.y() * scaleFactor);
+                    else if (m_gizmoDragPart == AxisZ)
+                        newScale.setZ(startScale.z() * scaleFactor);
+                    else if (m_gizmoDragPart == PlaneXY) {
+                        newScale.setX(startScale.x() * scaleFactor);
+                        newScale.setY(startScale.y() * scaleFactor);
+                    } else if (m_gizmoDragPart == PlaneXZ) {
+                        newScale.setX(startScale.x() * scaleFactor);
+                        newScale.setZ(startScale.z() * scaleFactor);
+                    } else if (m_gizmoDragPart == PlaneYZ) {
+                        newScale.setY(startScale.y() * scaleFactor);
+                        newScale.setZ(startScale.z() * scaleFactor);
+                    } else {
+                        // Origin: uniform
+                        newScale = startScale * scaleFactor;
+                    }
+
+                    QString val = QString("(%1, %2, %3)")
+                        .arg(double(newScale.x())).arg(double(newScale.y())).arg(double(newScale.z()));
+                    m_doc->setAttribute(m_meshes[idx].primPath,
+                                        QStringLiteral("xformOp:scale"), val);
+
+                    // Update visual transform from USD
+                    if (stageRef && *stageRef) {
+                        UsdGeomXformCache xfCache;
+                        SdfPath sdfPath(m_meshes[idx].primPath.toStdString());
+                        UsdPrim prim = (*stageRef)->GetPrimAtPath(sdfPath);
+                        if (prim.IsValid()) {
+                            GfMatrix4d xf = xfCache.GetLocalToWorldTransform(prim);
+                            float mf[16];
+                            for (int r = 0; r < 4; r++)
+                                for (int c = 0; c < 4; c++)
+                                    mf[c * 4 + r] = float(xf[r][c]);
+                            m_meshes[idx].transform = QMatrix4x4(mf);
+                        }
+                    }
+                }
+                emit gizmoDragUpdated();
+            }
         }
 
         m_meshDirty = true;
@@ -1204,12 +1651,16 @@ void UsdViewportItem::mouseReleaseEvent(QMouseEvent *e)
 {
     // Gizmo drag finished
     if (m_gizmoDragPart >= 0) {
-        // USD already has correct values from during-drag setAttribute calls.
         // Reset drag state first so stageModified can trigger rebuild.
         m_gizmoDragPart = -1;
         m_gizmoDragStartTranslations.clear();
         m_gizmoDragParentTransforms.clear();
         m_gizmoDragStartLocalTranslates.clear();
+        m_gizmoDragStartRotations.clear();
+        m_gizmoDragStartScales.clear();
+        m_gizmoDragStartAngle = 0.f;
+        m_gizmoDragStartDistance = 0.f;
+        m_scaleCubeFactors = QVector3D(1.f, 1.f, 1.f);
         // Rebuild meshes from USD to ensure everything is in sync
         buildMeshes();
         updateGizmoPosition();
@@ -1550,17 +2001,26 @@ void UsdViewportRenderer::synchronize(QQuickRhiItem *item)
     // Gizmo state
     m_gizmoVisible = vp->gizmoVisible();
     m_gizmoHoveredPart = vp->gizmoHoveredPart();
+    m_scaleCubeFactors = vp->scaleCubeFactors();
+    int newGizmoMode = vp->gizmoMode();
     if (m_gizmoVisible) {
         QVector3D eye = m_view.inverted().column(3).toVector3D();
         float dist = (vp->gizmoWorldPos() - eye).length();
-        float scale = dist * 0.12f;
+        float scale = dist * 0.08f;
         m_gizmoTransform.setToIdentity();
         m_gizmoTransform.translate(vp->gizmoWorldPos());
         m_gizmoTransform.scale(scale);
     }
-    if (m_rhiGizmo.isEmpty() && !vp->gizmoMeshes().isEmpty()) {
-        m_gizmoPending = vp->gizmoMeshes();
-        m_gizmoRebuild = true;
+    // Rebuild gizmo meshes when mode changes or first time
+    if (newGizmoMode != m_gizmoMode || (m_rhiGizmo.isEmpty() && !vp->activeGizmoMeshes().isEmpty())) {
+        m_gizmoMode = newGizmoMode;
+        if (!vp->activeGizmoMeshes().isEmpty()) {
+            m_gizmoPending = vp->activeGizmoMeshes();
+            m_gizmoRebuild = true;
+        } else if (m_gizmoMode == GizmoModeNone) {
+            // Mode switched to none — no need to rebuild, just clear
+            m_gizmoRebuild = false;
+        }
     }
 
     // Orientation indicator state
@@ -1785,10 +2245,41 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         for (int i = 0; i < m_rhiGizmo.size(); ++i) {
             auto &g = m_rhiGizmo[i];
             UBuf ub{};
-            memcpy(ub.mvp,   gizmoMVP.constData(),           64);
-            memcpy(ub.model, m_gizmoTransform.constData(),    64);
-            bool highlighted = (m_gizmoHoveredPart == i)
-                || (m_gizmoHoveredPart == Origin && i >= PlaneXY && i <= PlaneYZ);
+
+            // Scale gizmo cube tips: apply sliding offset
+            QMatrix4x4 partMVP = gizmoMVP;
+            QMatrix4x4 partModel = m_gizmoTransform;
+            if (m_gizmoMode == GizmoModeScale && i >= GizmoCount) {
+                // Cube tip center is at 0.84 along its axis in local space.
+                // Offset = 0.84 * (factor - 1) to slide to new position.
+                static const QVector3D axes[] = { {1,0,0}, {0,1,0}, {0,0,1} };
+                int axisIdx = i - GizmoCount; // 0=X, 1=Y, 2=Z
+                float factor = (axisIdx == 0) ? m_scaleCubeFactors.x()
+                             : (axisIdx == 1) ? m_scaleCubeFactors.y()
+                                              : m_scaleCubeFactors.z();
+                QMatrix4x4 offset;
+                offset.translate(axes[axisIdx] * 0.84f * (factor - 1.f));
+                partMVP = gizmoMVP * offset;
+                partModel = m_gizmoTransform * offset;
+            }
+
+            memcpy(ub.mvp,   partMVP.constData(),    64);
+            memcpy(ub.model, partModel.constData(),   64);
+            bool highlighted = (m_gizmoHoveredPart == i);
+            if (m_gizmoMode == GizmoModeScale) {
+                // Highlight cube tip when its axis is hovered (and vice versa)
+                if (i >= GizmoCount)
+                    highlighted = highlighted || (m_gizmoHoveredPart == i - GizmoCount);
+                else if (i <= AxisZ)
+                    highlighted = highlighted || (m_gizmoHoveredPart == i + GizmoCount);
+                // Also highlight planes when origin hovered
+                highlighted = highlighted
+                    || (m_gizmoHoveredPart == Origin && i >= PlaneXY && i <= PlaneYZ);
+            } else if (m_gizmoMode != GizmoModeRotate) {
+                // Translate: also highlight planes when origin hovered
+                highlighted = highlighted
+                    || (m_gizmoHoveredPart == Origin && i >= PlaneXY && i <= PlaneYZ);
+            }
             QVector3D c = highlighted ? g.highlightColor : g.color;
             ub.color[0] = c.x(); ub.color[1] = c.y(); ub.color[2] = c.z();
             ub.color[3] = 0.f; // flat color mode
