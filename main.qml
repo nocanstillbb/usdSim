@@ -445,6 +445,32 @@ ApplicationWindow {
                 }
                 onCheckedChanged: viewport.gizmoEnabled = checked
             }
+
+            // 左下角坐标轴方向标签
+            Text {
+                id: orientLabelX
+                x: viewport.orientLabelX.x - width / 2
+                y: viewport.orientLabelX.y - height / 2
+                text: "X"; color: "#ff3333"
+                font.pixelSize: 11; font.bold: true
+                visible: doc.isOpen
+            }
+            Text {
+                id: orientLabelY
+                x: viewport.orientLabelY.x - width / 2
+                y: viewport.orientLabelY.y - height / 2
+                text: "Y"; color: "#33ff33"
+                font.pixelSize: 11; font.bold: true
+                visible: doc.isOpen
+            }
+            Text {
+                id: orientLabelZ
+                x: viewport.orientLabelZ.x - width / 2
+                y: viewport.orientLabelZ.y - height / 2
+                text: "Z"; color: "#5599ff"
+                font.pixelSize: 11; font.bold: true
+                visible: doc.isOpen
+            }
         }
 
         // 右栏：属性编辑器

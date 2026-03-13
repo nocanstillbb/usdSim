@@ -93,6 +93,13 @@ private:
     bool m_gizmoVisible = false;
     QMatrix4x4 m_gizmoTransform;
     int m_gizmoHoveredPart = -1;
+
+    // Orientation indicator
+    QVector<RhiGizmoMesh> m_rhiOrientAxes;
+    QVector<GizmoMeshData> m_orientPending;
+    bool m_orientRebuild = false;
+    QMatrix4x4 m_orientView, m_orientProj;
+    QSizeF m_logicalSize;
 };
 
 // ================================================================
@@ -402,6 +409,62 @@ void UsdViewportItem::buildGizmoMeshes(QVector<GizmoMeshData> &out)
     }
 }
 
+// ================================================================
+//  Orientation indicator geometry (3 axes: X, Y, Z)
+// ================================================================
+void UsdViewportItem::buildOrientAxesMeshes(QVector<GizmoMeshData> &out)
+{
+    out.resize(3); // X=0, Y=1, Z=2
+
+    // Generate Y-axis base geometry (shaft + cone), same proportions as gizmo
+    QVector<float> shaftV; QVector<quint32> shaftI;
+    genCylinder(0.03f, 0.7f, shaftV, shaftI, false);
+    shiftVerticesY(shaftV, 0.35f); // 0..0.7
+
+    QVector<float> coneV; QVector<quint32> coneI;
+    genCone(0.08f, 0.2f, coneV, coneI);
+    shiftVerticesY(coneV, 0.8f); // 0.7..0.9
+
+    // Y-axis (green)
+    out[1].vertices = shaftV;
+    out[1].indices  = shaftI;
+    mergeGeometry(out[1].vertices, out[1].indices, coneV, coneI);
+    out[1].color          = QVector3D(0.2f, 1.0f, 0.2f);
+    out[1].highlightColor = out[1].color;
+
+    // X-axis (red): swap Y↔X
+    out[0].vertices = out[1].vertices;
+    out[0].indices  = out[1].indices;
+    {
+        float *d = out[0].vertices.data();
+        int count = out[0].vertices.size() / 6;
+        for (int i = 0; i < count; ++i) {
+            float *p = d + i * 6;
+            std::swap(p[0], p[1]);
+            std::swap(p[3], p[4]);
+        }
+    }
+    out[0].color          = QVector3D(1.0f, 0.2f, 0.2f);
+    out[0].highlightColor = out[0].color;
+
+    // Z-axis (blue): Y→Z  (x,y,z) → (x,-z,y)
+    out[2].vertices = out[1].vertices;
+    out[2].indices  = out[1].indices;
+    {
+        float *d = out[2].vertices.data();
+        int count = out[2].vertices.size() / 6;
+        for (int i = 0; i < count; ++i) {
+            float *p = d + i * 6;
+            float oy = p[1], oz = p[2];
+            p[1] = -oz; p[2] = oy;
+            float ny = p[4], nz = p[5];
+            p[4] = -nz; p[5] = ny;
+        }
+    }
+    out[2].color          = QVector3D(0.3f, 0.5f, 1.0f);
+    out[2].highlightColor = out[2].color;
+}
+
 // Rotate vertices generated with Y-up to match the USD prim's axis attribute.
 // Generators produce geometry with height along Y; this swizzles to X or Z when needed.
 static void rotateVertsForAxis(QVector<float> &v, const TfToken &axis)
@@ -599,6 +662,7 @@ UsdViewportItem::UsdViewportItem(QQuickItem *parent)
     setAcceptedMouseButtons(Qt::LeftButton | Qt::RightButton | Qt::MiddleButton);
     setAcceptHoverEvents(true);
     buildGizmoMeshes(m_gizmoMeshes);
+    buildOrientAxesMeshes(m_orientAxesMeshes);
     updateCamera();
 }
 
@@ -797,6 +861,48 @@ void UsdViewportItem::updateCamera()
                          ? float(width()) / float(height()) : 1.f;
     m_proj.setToIdentity();
     m_proj.perspective(45.f, aspect, 0.1f, 500.f);
+
+    updateOrientLabels();
+}
+
+// ================================================================
+//  Orientation indicator label positions
+// ================================================================
+void UsdViewportItem::updateOrientLabels()
+{
+    const float miniSize = 80.f;
+    const float margin = 10.f;
+
+    // Rotation-only view (strip translation from camera view)
+    QMatrix4x4 rotView;
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++)
+            rotView(r, c) = m_view(r, c);
+    rotView(2, 3) = -5.f;
+    rotView(3, 3) = 1.f;
+
+    QMatrix4x4 ortho;
+    ortho.ortho(-1.4f, 1.4f, -1.4f, 1.4f, 0.1f, 100.f);
+
+    QMatrix4x4 mvp = ortho * rotView;
+
+    float miniX = margin;
+    float miniY = height() - margin - miniSize;
+
+    auto project = [&](QVector3D pos) -> QPointF {
+        QVector4D clip = mvp * QVector4D(pos, 1.f);
+        float ndcX = clip.x() / clip.w();
+        float ndcY = clip.y() / clip.w();
+        return QPointF(
+            miniX + (ndcX + 1.f) * 0.5f * miniSize,
+            miniY + (1.f - ndcY) * 0.5f * miniSize
+        );
+    };
+
+    m_orientLabels[0] = project(QVector3D(1.15f, 0, 0)); // X
+    m_orientLabels[1] = project(QVector3D(0, 1.15f, 0)); // Y
+    m_orientLabels[2] = project(QVector3D(0, 0, 1.15f)); // Z
+    emit orientLabelsChanged();
 }
 
 // ================================================================
@@ -1297,6 +1403,10 @@ UsdViewportRenderer::~UsdViewportRenderer()
 {
     destroyMeshes();
     destroyGizmoMeshes();
+    for (auto &g : m_rhiOrientAxes) {
+        delete g.vbuf; delete g.ibuf;
+        delete g.ubuf; delete g.srb;
+    }
     delete m_pipeline;
     delete m_wirePipeline;
     delete m_stencilPipeline;
@@ -1452,6 +1562,24 @@ void UsdViewportRenderer::synchronize(QQuickRhiItem *item)
         m_gizmoPending = vp->gizmoMeshes();
         m_gizmoRebuild = true;
     }
+
+    // Orientation indicator state
+    m_logicalSize = QSizeF(vp->width(), vp->height());
+    {
+        QMatrix4x4 rotView;
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+                rotView(r, c) = m_view(r, c);
+        rotView(2, 3) = -5.f;
+        rotView(3, 3) = 1.f;
+        m_orientView = rotView;
+    }
+    m_orientProj.setToIdentity();
+    m_orientProj.ortho(-1.4f, 1.4f, -1.4f, 1.4f, 0.1f, 100.f);
+    if (m_rhiOrientAxes.isEmpty() && !vp->orientAxesMeshes().isEmpty()) {
+        m_orientPending = vp->orientAxesMeshes();
+        m_orientRebuild = true;
+    }
 }
 
 void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
@@ -1479,6 +1607,21 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             uploadGizmoMesh(m_rhiGizmo[i], m_gizmoPending[i], upd);
         m_gizmoPending.clear();
         m_gizmoRebuild = false;
+    }
+
+    // Create orient axes RHI resources (once)
+    if (m_orientRebuild && !m_orientPending.isEmpty()) {
+        for (auto &g : m_rhiOrientAxes) {
+            delete g.vbuf; delete g.ibuf;
+            delete g.ubuf; delete g.srb;
+        }
+        m_rhiOrientAxes.clear();
+        delete m_gizmoPipeline; m_gizmoPipeline = nullptr;
+        m_rhiOrientAxes.resize(m_orientPending.size());
+        for (int i = 0; i < m_orientPending.size(); i++)
+            uploadGizmoMesh(m_rhiOrientAxes[i], m_orientPending[i], upd);
+        m_orientPending.clear();
+        m_orientRebuild = false;
     }
 
     if (m_meshes.isEmpty()) {
@@ -1574,8 +1717,8 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         m_wirePipeline->create();
     }
 
-    // Gizmo pipeline (no depth test, always on top)
-    if (!m_gizmoPipeline && !m_rhiGizmo.isEmpty()) {
+    // Gizmo / orient axes pipeline (no depth test, always on top)
+    if (!m_gizmoPipeline && (!m_rhiGizmo.isEmpty() || !m_rhiOrientAxes.isEmpty())) {
         QRhiVertexInputLayout il;
         il.setBindings({ QRhiVertexInputBinding(6 * sizeof(float)) });
         il.setAttributes({
@@ -1596,7 +1739,9 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             { QRhiShaderStage::Fragment, m_fs }
         });
         m_gizmoPipeline->setVertexInputLayout(il);
-        m_gizmoPipeline->setShaderResourceBindings(m_rhiGizmo[0].srb);
+        QRhiShaderResourceBindings *srb = !m_rhiGizmo.isEmpty()
+            ? m_rhiGizmo[0].srb : m_rhiOrientAxes[0].srb;
+        m_gizmoPipeline->setShaderResourceBindings(srb);
         m_gizmoPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
         m_gizmoPipeline->create();
     }
@@ -1652,6 +1797,22 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         }
     }
 
+    // Orient axes UBO updates
+    if (!m_rhiOrientAxes.isEmpty()) {
+        QMatrix4x4 orientMVP = rhi->clipSpaceCorrMatrix() * m_orientProj * m_orientView;
+        QMatrix4x4 id;
+        for (int i = 0; i < m_rhiOrientAxes.size(); ++i) {
+            auto &g = m_rhiOrientAxes[i];
+            UBuf ub{};
+            memcpy(ub.mvp,   orientMVP.constData(), 64);
+            memcpy(ub.model, id.constData(),         64);
+            ub.color[0] = g.color.x(); ub.color[1] = g.color.y();
+            ub.color[2] = g.color.z(); ub.color[3] = 0.f;
+            memset(ub.lightDir, 0, 16);
+            upd->updateDynamicBuffer(g.ubuf, 0, sizeof(UBuf), &ub);
+        }
+    }
+
     cb->beginPass(renderTarget(), QColor(30, 30, 30), {1.f, 0}, upd);
     cb->setGraphicsPipeline(m_pipeline);
     cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
@@ -1700,6 +1861,23 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         cb->setGraphicsPipeline(m_gizmoPipeline);
         cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
         for (auto &g : m_rhiGizmo) {
+            cb->setShaderResources(g.srb);
+            QRhiCommandBuffer::VertexInput gvi(g.vbuf, 0);
+            cb->setVertexInput(0, 1, &gvi, g.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
+            cb->drawIndexed(g.indexCount);
+        }
+    }
+
+    // Orientation axes (bottom-left mini viewport)
+    if (m_gizmoPipeline && !m_rhiOrientAxes.isEmpty()) {
+        cb->setGraphicsPipeline(m_gizmoPipeline);
+        float dpr = m_logicalSize.width() > 0
+            ? float(sz.width()) / float(m_logicalSize.width()) : 1.f;
+        int miniPx = int(80.f * dpr);
+        int marginPx = int(10.f * dpr);
+        cb->setViewport(QRhiViewport(marginPx, marginPx,
+                                      miniPx, miniPx));
+        for (auto &g : m_rhiOrientAxes) {
             cb->setShaderResources(g.srb);
             QRhiCommandBuffer::VertexInput gvi(g.vbuf, 0);
             cb->setVertexInput(0, 1, &gvi, g.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
