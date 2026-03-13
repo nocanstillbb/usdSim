@@ -8,6 +8,7 @@
 #include <QtMath>
 #include <rhi/qrhi.h>
 #include <cfloat>
+#include <algorithm>
 
 // USD
 #include <pxr/usd/usd/stage.h>
@@ -61,9 +62,20 @@ private:
     void destroyMeshes();
     void uploadMesh(RhiMesh &dst, const MeshData &src, QRhiResourceUpdateBatch *batch);
 
+    struct RhiGizmoMesh {
+        QRhiBuffer *vbuf = nullptr, *ibuf = nullptr, *ubuf = nullptr;
+        QRhiShaderResourceBindings *srb = nullptr;
+        int indexCount = 0;
+        QVector3D color;
+        QVector3D highlightColor;
+    };
+    void destroyGizmoMeshes();
+    void uploadGizmoMesh(RhiGizmoMesh &dst, const GizmoMeshData &src, QRhiResourceUpdateBatch *batch);
+
     QRhiGraphicsPipeline *m_pipeline       = nullptr;
     QRhiGraphicsPipeline *m_wirePipeline   = nullptr;
     QRhiGraphicsPipeline *m_stencilPipeline = nullptr;
+    QRhiGraphicsPipeline *m_gizmoPipeline  = nullptr;
     QShader m_vs, m_fs;
     bool m_initialized = false;
 
@@ -73,6 +85,14 @@ private:
     QSet<int> m_selectedIndices;
 
     QMatrix4x4 m_view, m_proj;
+
+    // Gizmo render state
+    QVector<RhiGizmoMesh> m_rhiGizmo;
+    QVector<GizmoMeshData> m_gizmoPending;
+    bool m_gizmoRebuild = false;
+    bool m_gizmoVisible = false;
+    QMatrix4x4 m_gizmoTransform;
+    int m_gizmoHoveredPart = -1;
 };
 
 // ================================================================
@@ -263,6 +283,123 @@ static void genPlane(float width, float length,
     v <<  hw << 0 << -hl << 0 << 1 << 0;
     v << -hw << 0 << -hl << 0 << 1 << 0;
     idx << 0 << 1 << 2 << 0 << 2 << 3;
+}
+
+// ================================================================
+//  Gizmo geometry generation
+// ================================================================
+static void shiftVerticesY(QVector<float> &v, float dy)
+{
+    const int stride = 6;
+    float *d = v.data();
+    for (int i = 0; i < v.size(); i += stride)
+        d[i + 1] += dy;
+}
+
+static void mergeGeometry(QVector<float> &dstV, QVector<quint32> &dstI,
+                           const QVector<float> &srcV, const QVector<quint32> &srcI)
+{
+    quint32 base = dstV.size() / 6;
+    dstV.append(srcV);
+    for (quint32 idx : srcI)
+        dstI.append(base + idx);
+}
+
+void UsdViewportItem::buildGizmoMeshes(QVector<GizmoMeshData> &out)
+{
+    out.resize(GizmoCount);
+
+    // Generate Y-axis base geometry (shaft + cone)
+    QVector<float> shaftV; QVector<quint32> shaftI;
+    genCylinder(0.015f, 0.8f, shaftV, shaftI, false);
+    shiftVerticesY(shaftV, 0.4f); // 0..0.8
+
+    QVector<float> coneV; QVector<quint32> coneI;
+    genCone(0.05f, 0.2f, coneV, coneI);
+    shiftVerticesY(coneV, 0.9f); // 0.8..1.0
+
+    // Y-axis
+    out[AxisY].vertices = shaftV;
+    out[AxisY].indices  = shaftI;
+    mergeGeometry(out[AxisY].vertices, out[AxisY].indices, coneV, coneI);
+    out[AxisY].color          = QVector3D(0.2f, 1.0f, 0.2f);
+    out[AxisY].highlightColor = QVector3D(0.6f, 1.0f, 0.6f);
+
+    // X-axis: Y→X swap (x,y,z) → (y,x,z)
+    out[AxisX].vertices = out[AxisY].vertices;
+    out[AxisX].indices  = out[AxisY].indices;
+    {
+        float *d = out[AxisX].vertices.data();
+        int count = out[AxisX].vertices.size() / 6;
+        for (int i = 0; i < count; ++i) {
+            float *p = d + i * 6;
+            std::swap(p[0], p[1]); // swap x,y positions
+            std::swap(p[3], p[4]); // swap x,y normals
+        }
+    }
+    out[AxisX].color          = QVector3D(1.0f, 0.2f, 0.2f);
+    out[AxisX].highlightColor = QVector3D(1.0f, 0.6f, 0.6f);
+
+    // Z-axis: Y→Z (x,y,z) → (x,-z,y)
+    out[AxisZ].vertices = out[AxisY].vertices;
+    out[AxisZ].indices  = out[AxisY].indices;
+    {
+        float *d = out[AxisZ].vertices.data();
+        int count = out[AxisZ].vertices.size() / 6;
+        for (int i = 0; i < count; ++i) {
+            float *p = d + i * 6;
+            float oy = p[1], oz = p[2];
+            p[1] = -oz; p[2] = oy;
+            float ny = p[4], nz = p[5];
+            p[4] = -nz; p[5] = ny;
+        }
+    }
+    out[AxisZ].color          = QVector3D(0.3f, 0.5f, 1.0f);
+    out[AxisZ].highlightColor = QVector3D(0.6f, 0.8f, 1.0f);
+
+    // XY plane (normal Z): quad centered in XY square, range [0.35,0.6]
+    {
+        auto &m = out[PlaneXY];
+        m.vertices << 0.35f << 0.35f << 0.f << 0.f << 0.f << 1.f;
+        m.vertices << 0.6f << 0.35f << 0.f << 0.f << 0.f << 1.f;
+        m.vertices << 0.6f << 0.6f << 0.f << 0.f << 0.f << 1.f;
+        m.vertices << 0.35f << 0.6f << 0.f << 0.f << 0.f << 1.f;
+        m.indices << 0 << 1 << 2 << 0 << 2 << 3;
+        m.color          = QVector3D(0.9f, 0.9f, 0.2f);
+        m.highlightColor = QVector3D(1.0f, 1.0f, 0.6f);
+    }
+
+    // XZ plane (normal Y): quad centered in XZ square, range [0.35,0.6]
+    {
+        auto &m = out[PlaneXZ];
+        m.vertices << 0.35f << 0.f << 0.35f << 0.f << 1.f << 0.f;
+        m.vertices << 0.6f << 0.f << 0.35f << 0.f << 1.f << 0.f;
+        m.vertices << 0.6f << 0.f << 0.6f << 0.f << 1.f << 0.f;
+        m.vertices << 0.35f << 0.f << 0.6f << 0.f << 1.f << 0.f;
+        m.indices << 0 << 1 << 2 << 0 << 2 << 3;
+        m.color          = QVector3D(0.9f, 0.5f, 0.9f);
+        m.highlightColor = QVector3D(1.0f, 0.8f, 1.0f);
+    }
+
+    // YZ plane (normal X): quad centered in YZ square, range [0.35,0.6]
+    {
+        auto &m = out[PlaneYZ];
+        m.vertices << 0.f << 0.35f << 0.35f << 1.f << 0.f << 0.f;
+        m.vertices << 0.f << 0.6f << 0.35f << 1.f << 0.f << 0.f;
+        m.vertices << 0.f << 0.6f << 0.6f << 1.f << 0.f << 0.f;
+        m.vertices << 0.f << 0.35f << 0.6f << 1.f << 0.f << 0.f;
+        m.indices << 0 << 1 << 2 << 0 << 2 << 3;
+        m.color          = QVector3D(0.2f, 0.9f, 0.9f);
+        m.highlightColor = QVector3D(0.6f, 1.0f, 1.0f);
+    }
+
+    // Origin sphere
+    {
+        auto &m = out[Origin];
+        genSphere(0.08f, m.vertices, m.indices);
+        m.color          = QVector3D(0.9f, 0.9f, 0.9f);
+        m.highlightColor = QVector3D(1.0f, 1.0f, 1.0f);
+    }
 }
 
 // Rotate vertices generated with Y-up to match the USD prim's axis attribute.
@@ -460,6 +597,8 @@ UsdViewportItem::UsdViewportItem(QQuickItem *parent)
     : QQuickRhiItem(parent)
 {
     setAcceptedMouseButtons(Qt::LeftButton | Qt::RightButton | Qt::MiddleButton);
+    setAcceptHoverEvents(true);
+    buildGizmoMeshes(m_gizmoMeshes);
     updateCamera();
 }
 
@@ -486,6 +625,8 @@ void UsdViewportItem::setDocument(UsdDocument *doc)
 
 void UsdViewportItem::onDocumentChanged()
 {
+    // Skip rebuild during gizmo drag — we update transforms directly
+    if (m_gizmoDragPart >= 0) return;
     buildMeshes();
     update();
 }
@@ -647,6 +788,8 @@ void UsdViewportItem::updateCamera()
     if (cp < 0.f)
         up = -up;
 
+    m_cameraEye = eye;
+
     m_view.setToIdentity();
     m_view.lookAt(eye, m_target, up);
 
@@ -656,22 +799,289 @@ void UsdViewportItem::updateCamera()
     m_proj.perspective(45.f, aspect, 0.1f, 500.f);
 }
 
+// ================================================================
+//  Gizmo helpers
+// ================================================================
+void UsdViewportItem::setGizmoEnabled(bool on)
+{
+    if (m_gizmoEnabled == on) return;
+    m_gizmoEnabled = on;
+    m_gizmoHoveredPart = -1;
+    m_gizmoDragPart = -1;
+    if (on) updateGizmoPosition();
+    m_meshDirty = true;
+    update();
+    emit gizmoEnabledChanged();
+}
+
+void UsdViewportItem::updateGizmoPosition()
+{
+    if (!m_gizmoEnabled || m_selectedMeshes.isEmpty()) return;
+    int anchorIdx = -1;
+    for (int idx : m_selectedMeshes)
+        if (idx >= 0 && idx < m_meshes.size())
+            anchorIdx = idx;
+    if (anchorIdx >= 0) {
+        const QMatrix4x4 &xf = m_meshes[anchorIdx].transform;
+        m_gizmoWorldPos = QVector3D(xf(0, 3), xf(1, 3), xf(2, 3));
+    }
+}
+
+int UsdViewportItem::pickGizmo(const QPointF &pos) const
+{
+    if (!m_gizmoEnabled || m_selectedMeshes.isEmpty()) return -1;
+
+    QMatrix4x4 invVP = (m_proj * m_view).inverted();
+    float nx = 2.f * float(pos.x()) / float(width())  - 1.f;
+    float ny = 1.f - 2.f * float(pos.y()) / float(height());
+
+    QVector4D nearH = invVP * QVector4D(nx, ny, -1.f, 1.f);
+    QVector4D farH  = invVP * QVector4D(nx, ny,  1.f, 1.f);
+    QVector3D rayOrig = nearH.toVector3DAffine();
+    QVector3D rayDir  = (farH.toVector3DAffine() - rayOrig).normalized();
+
+    // Compute gizmo transform (constant screen size)
+    float dist = (m_gizmoWorldPos - m_cameraEye).length();
+    float scale = dist * 0.12f;
+    QMatrix4x4 gizmoXf;
+    gizmoXf.translate(m_gizmoWorldPos);
+    gizmoXf.scale(scale);
+
+    QMatrix4x4 invGizmo = gizmoXf.inverted();
+    QVector3D orig = invGizmo.map(rayOrig);
+    QVector3D dir  = invGizmo.mapVector(rayDir).normalized();
+
+    float bestT = FLT_MAX;
+    int bestPart = -1;
+
+    for (int pi = 0; pi < m_gizmoMeshes.size(); ++pi) {
+        const auto &gm = m_gizmoMeshes[pi];
+        const float *vd = gm.vertices.constData();
+        const int stride = 6;
+
+        for (int i = 0; i + 2 < gm.indices.size(); i += 3) {
+            int i0 = gm.indices[i], i1 = gm.indices[i+1], i2 = gm.indices[i+2];
+            QVector3D v0(vd[i0*stride], vd[i0*stride+1], vd[i0*stride+2]);
+            QVector3D v1(vd[i1*stride], vd[i1*stride+1], vd[i1*stride+2]);
+            QVector3D v2(vd[i2*stride], vd[i2*stride+1], vd[i2*stride+2]);
+
+            QVector3D e1 = v1 - v0, e2 = v2 - v0;
+            QVector3D h = QVector3D::crossProduct(dir, e2);
+            float a = QVector3D::dotProduct(e1, h);
+            if (fabsf(a) < 1e-7f) continue;
+            float f = 1.f / a;
+            QVector3D s = orig - v0;
+            float u = f * QVector3D::dotProduct(s, h);
+            if (u < 0.f || u > 1.f) continue;
+            QVector3D q = QVector3D::crossProduct(s, e1);
+            float v = f * QVector3D::dotProduct(dir, q);
+            if (v < 0.f || u + v > 1.f) continue;
+            float t = f * QVector3D::dotProduct(e2, q);
+            if (t > 1e-5f && t < bestT) {
+                bestT = t;
+                bestPart = pi;
+            }
+        }
+    }
+    return bestPart;
+}
+
+void UsdViewportItem::hoverMoveEvent(QHoverEvent *e)
+{
+    if (m_gizmoEnabled && !m_selectedMeshes.isEmpty()) {
+        int newHover = pickGizmo(e->position());
+        if (newHover != m_gizmoHoveredPart) {
+            m_gizmoHoveredPart = newHover;
+            m_meshDirty = true;
+            update();
+        }
+    }
+    e->accept();
+}
+
+// ================================================================
+//  Mouse interaction (camera + gizmo drag)
+// ================================================================
+static QVector3D buildRay(const QMatrix4x4 &invVP, float px, float py, float w, float h,
+                           QVector3D &outOrig)
+{
+    float nx = 2.f * px / w - 1.f;
+    float ny = 1.f - 2.f * py / h;
+    QVector4D nearH = invVP * QVector4D(nx, ny, -1.f, 1.f);
+    QVector4D farH  = invVP * QVector4D(nx, ny,  1.f, 1.f);
+    outOrig = nearH.toVector3DAffine();
+    return (farH.toVector3DAffine() - outOrig).normalized();
+}
+
+// Closest parameter t on line P + t*D1 from ray Q + s*D2
+static float closestParamOnLine(QVector3D P, QVector3D D1, QVector3D Q, QVector3D D2)
+{
+    QVector3D w0 = P - Q;
+    float a = QVector3D::dotProduct(D1, D1);
+    float b = QVector3D::dotProduct(D1, D2);
+    float c = QVector3D::dotProduct(D2, D2);
+    float d = QVector3D::dotProduct(D1, w0);
+    float e = QVector3D::dotProduct(D2, w0);
+    float denom = a * c - b * b;
+    if (fabsf(denom) < 1e-10f) return 0.f;
+    return (b * e - c * d) / denom;
+}
+
+// Ray-plane intersection hit point
+static QVector3D rayPlaneHit(QVector3D rayO, QVector3D rayD, QVector3D planeO, QVector3D planeN)
+{
+    float denom = QVector3D::dotProduct(rayD, planeN);
+    if (fabsf(denom) < 1e-10f) return planeO;
+    float t = QVector3D::dotProduct(planeO - rayO, planeN) / denom;
+    return rayO + rayD * t;
+}
+
 void UsdViewportItem::mousePressEvent(QMouseEvent *e)
 {
     m_lastMouse = e->position();
     m_pressPos  = e->position();
+
+    // Gizmo pick takes priority
+    if (m_gizmoEnabled && !m_selectedMeshes.isEmpty() && e->button() == Qt::LeftButton) {
+        int hit = pickGizmo(e->position());
+        if (hit >= 0) {
+            m_gizmoDragPart = hit;
+            m_gizmoHoveredPart = hit;
+            m_gizmoDragStartPos = m_gizmoWorldPos;
+            m_gizmoDragStartMouse = e->position();
+            // Save start translations for all selected meshes
+            m_gizmoDragStartTranslations.clear();
+            m_gizmoDragParentTransforms.clear();
+            m_gizmoDragStartLocalTranslates.clear();
+
+            // Read parent transforms and local translates from USD
+            auto *stageRef = m_doc ? static_cast<UsdStageRefPtr *>(m_doc->stagePtr()) : nullptr;
+            UsdGeomXformCache xfCache;
+
+            for (int idx : m_selectedMeshes) {
+                if (idx < 0 || idx >= m_meshes.size()) continue;
+                const QMatrix4x4 &xf = m_meshes[idx].transform;
+                m_gizmoDragStartTranslations[idx] = QVector3D(xf(0, 3), xf(1, 3), xf(2, 3));
+
+                if (stageRef && *stageRef) {
+                    SdfPath sdfPath(m_meshes[idx].primPath.toStdString());
+                    UsdPrim prim = (*stageRef)->GetPrimAtPath(sdfPath);
+                    if (prim.IsValid()) {
+                        // Parent-to-world transform
+                        GfMatrix4d parentGf = xfCache.GetParentToWorldTransform(prim);
+                        float mf[16];
+                        for (int r = 0; r < 4; r++)
+                            for (int c = 0; c < 4; c++)
+                                mf[c * 4 + r] = float(parentGf[r][c]);
+                        m_gizmoDragParentTransforms[idx] = QMatrix4x4(mf);
+
+                        // Current local xformOp:translate (handle both float3 and double3)
+                        UsdAttribute attr = prim.GetAttribute(TfToken("xformOp:translate"));
+                        QVector3D localT(0, 0, 0);
+                        if (attr.IsValid()) {
+                            GfVec3f vf;
+                            GfVec3d vd;
+                            if (attr.Get(&vf))
+                                localT = QVector3D(vf[0], vf[1], vf[2]);
+                            else if (attr.Get(&vd))
+                                localT = QVector3D(float(vd[0]), float(vd[1]), float(vd[2]));
+                        }
+                        m_gizmoDragStartLocalTranslates[idx] = localT;
+                    }
+                }
+            }
+            e->accept();
+            return;
+        }
+    }
+
     m_panning = (e->modifiers() & Qt::AltModifier) || (e->button() == Qt::MiddleButton);
     m_dragging = true;
     e->accept();
 }
+
 void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
 {
+    // Gizmo dragging
+    if (m_gizmoDragPart >= 0) {
+        QMatrix4x4 invVP = (m_proj * m_view).inverted();
+        float w = float(width()), h = float(height());
+
+        QVector3D curOrig, startOrig;
+        QVector3D curDir  = buildRay(invVP, float(e->position().x()), float(e->position().y()), w, h, curOrig);
+        QVector3D startDir = buildRay(invVP, float(m_gizmoDragStartMouse.x()), float(m_gizmoDragStartMouse.y()), w, h, startOrig);
+
+        QVector3D delta(0, 0, 0);
+        QVector3D origin = m_gizmoDragStartPos;
+
+        if (m_gizmoDragPart <= AxisZ) {
+            // Axis constraint
+            static const QVector3D axes[] = { {1,0,0}, {0,1,0}, {0,0,1} };
+            QVector3D axis = axes[m_gizmoDragPart];
+            float tCurr  = closestParamOnLine(origin, axis, curOrig, curDir);
+            float tStart = closestParamOnLine(origin, axis, startOrig, startDir);
+            delta = axis * (tCurr - tStart);
+        } else if (m_gizmoDragPart <= PlaneYZ) {
+            // Plane constraint
+            static const QVector3D normals[] = { {0,0,1}, {0,1,0}, {1,0,0} };
+            QVector3D planeN = normals[m_gizmoDragPart - PlaneXY];
+            QVector3D hitCurr  = rayPlaneHit(curOrig, curDir, origin, planeN);
+            QVector3D hitStart = rayPlaneHit(startOrig, startDir, origin, planeN);
+            delta = hitCurr - hitStart;
+        } else {
+            // Origin: view plane
+            QVector3D planeN = (m_cameraEye - origin).normalized();
+            QVector3D hitCurr  = rayPlaneHit(curOrig, curDir, origin, planeN);
+            QVector3D hitStart = rayPlaneHit(startOrig, startDir, origin, planeN);
+            delta = hitCurr - hitStart;
+        }
+
+        // Apply delta to all selected meshes (visual: world transform)
+        for (auto it = m_gizmoDragStartTranslations.constBegin();
+             it != m_gizmoDragStartTranslations.constEnd(); ++it) {
+            int idx = it.key();
+            if (idx >= 0 && idx < m_meshes.size()) {
+                QVector3D newT = it.value() + delta;
+                m_meshes[idx].transform(0, 3) = newT.x();
+                m_meshes[idx].transform(1, 3) = newT.y();
+                m_meshes[idx].transform(2, 3) = newT.z();
+            }
+        }
+        m_gizmoWorldPos = m_gizmoDragStartPos + delta;
+
+        // Write correct local translate to USD (for live panel updates)
+        if (m_doc) {
+            for (auto it = m_gizmoDragStartLocalTranslates.constBegin();
+                 it != m_gizmoDragStartLocalTranslates.constEnd(); ++it) {
+                int idx = it.key();
+                if (idx < 0 || idx >= m_meshes.size()) continue;
+                // Convert world delta to local space via parent transform
+                QVector3D localDelta = delta;
+                if (m_gizmoDragParentTransforms.contains(idx)) {
+                    QMatrix4x4 parentInv = m_gizmoDragParentTransforms[idx].inverted();
+                    localDelta = parentInv.mapVector(delta);
+                }
+                QVector3D newLocal = it.value() + localDelta;
+                QString val = QString("(%1, %2, %3)")
+                    .arg(double(newLocal.x())).arg(double(newLocal.y())).arg(double(newLocal.z()));
+                m_doc->setAttribute(m_meshes[idx].primPath,
+                                    QStringLiteral("xformOp:translate"), val);
+            }
+            // Notify QML to refresh attribute values in-place (no model rebuild)
+            emit gizmoDragUpdated();
+        }
+
+        m_meshDirty = true;
+        update();
+        e->accept();
+        return;
+    }
+
     if (!m_dragging) return;
     m_meshDirty = true;
     QPointF d = e->position() - m_lastMouse; m_lastMouse = e->position();
 
     if (m_panning) {
-        // Pan: move target along camera right/up vectors
         float scale = m_dist * 0.002f;
         QVector3D right(m_view(0, 0), m_view(0, 1), m_view(0, 2));
         QVector3D camUp(m_view(1, 0), m_view(1, 1), m_view(1, 2));
@@ -683,8 +1093,29 @@ void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
     }
     updateCamera(); update(); e->accept();
 }
+
 void UsdViewportItem::mouseReleaseEvent(QMouseEvent *e)
 {
+    // Gizmo drag finished
+    if (m_gizmoDragPart >= 0) {
+        // USD already has correct values from during-drag setAttribute calls.
+        // Reset drag state first so stageModified can trigger rebuild.
+        m_gizmoDragPart = -1;
+        m_gizmoDragStartTranslations.clear();
+        m_gizmoDragParentTransforms.clear();
+        m_gizmoDragStartLocalTranslates.clear();
+        // Rebuild meshes from USD to ensure everything is in sync
+        buildMeshes();
+        updateGizmoPosition();
+        m_meshDirty = true;
+        update();
+        for (int idx : m_selectedMeshes)
+            if (idx >= 0 && idx < m_meshes.size())
+                emit gizmoDragFinished(m_meshes[idx].primPath);
+        e->accept();
+        return;
+    }
+
     // Detect click (no significant drag)
     if (e->button() == Qt::LeftButton) {
         QPointF delta = e->position() - m_pressPos;
@@ -737,6 +1168,7 @@ void UsdViewportItem::selectPrimPath(const QString &path)
     if (newSel != m_selectedMeshes) {
         m_selectedMeshes = newSel;
         m_meshDirty = true;
+        updateGizmoPosition();
         update();
         emit selectedPrimPathsChanged();
     }
@@ -755,6 +1187,7 @@ void UsdViewportItem::selectPrimPaths(const QStringList &paths)
     if (newSel != m_selectedMeshes) {
         m_selectedMeshes = newSel;
         m_meshDirty = true;
+        updateGizmoPosition();
         update();
         emit selectedPrimPathsChanged();
     }
@@ -786,6 +1219,7 @@ void UsdViewportItem::togglePrimPath(const QString &path)
         m_selectedMeshes += matched;
 
     m_meshDirty = true;
+    updateGizmoPosition();
     update();
     emit selectedPrimPathsChanged();
 }
@@ -862,9 +1296,11 @@ static QShader loadShader(const QString &path)
 UsdViewportRenderer::~UsdViewportRenderer()
 {
     destroyMeshes();
+    destroyGizmoMeshes();
     delete m_pipeline;
     delete m_wirePipeline;
     delete m_stencilPipeline;
+    delete m_gizmoPipeline;
 }
 
 void UsdViewportRenderer::destroyMeshes()
@@ -943,6 +1379,44 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
     }
 }
 
+void UsdViewportRenderer::destroyGizmoMeshes()
+{
+    for (auto &g : m_rhiGizmo) {
+        delete g.vbuf; delete g.ibuf;
+        delete g.ubuf; delete g.srb;
+    }
+    m_rhiGizmo.clear();
+}
+
+void UsdViewportRenderer::uploadGizmoMesh(RhiGizmoMesh &dst, const GizmoMeshData &src,
+                                            QRhiResourceUpdateBatch *batch)
+{
+    QRhi *rhi = renderTarget()->rhi();
+    const int vsize = src.vertices.size() * sizeof(float);
+    const int isize = src.indices.size()  * sizeof(quint32);
+
+    dst.vbuf = rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, vsize);
+    dst.ibuf = rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::IndexBuffer,  isize);
+    dst.ubuf = rhi->newBuffer(QRhiBuffer::Dynamic,   QRhiBuffer::UniformBuffer, 160);
+    dst.vbuf->create(); dst.ibuf->create(); dst.ubuf->create();
+
+    dst.srb = rhi->newShaderResourceBindings();
+    dst.srb->setBindings({
+        QRhiShaderResourceBinding::uniformBuffer(
+            0,
+            QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
+            dst.ubuf)
+    });
+    dst.srb->create();
+
+    batch->uploadStaticBuffer(dst.vbuf, src.vertices.constData());
+    batch->uploadStaticBuffer(dst.ibuf, src.indices.constData());
+
+    dst.indexCount     = src.indices.size();
+    dst.color          = src.color;
+    dst.highlightColor = src.highlightColor;
+}
+
 void UsdViewportRenderer::initialize(QRhiCommandBuffer *)
 {
     if (m_initialized) return;
@@ -962,6 +1436,22 @@ void UsdViewportRenderer::synchronize(QQuickRhiItem *item)
         vp->clearMeshDirty();
         m_rebuild = true;
     }
+
+    // Gizmo state
+    m_gizmoVisible = vp->gizmoVisible();
+    m_gizmoHoveredPart = vp->gizmoHoveredPart();
+    if (m_gizmoVisible) {
+        QVector3D eye = m_view.inverted().column(3).toVector3D();
+        float dist = (vp->gizmoWorldPos() - eye).length();
+        float scale = dist * 0.12f;
+        m_gizmoTransform.setToIdentity();
+        m_gizmoTransform.translate(vp->gizmoWorldPos());
+        m_gizmoTransform.scale(scale);
+    }
+    if (m_rhiGizmo.isEmpty() && !vp->gizmoMeshes().isEmpty()) {
+        m_gizmoPending = vp->gizmoMeshes();
+        m_gizmoRebuild = true;
+    }
 }
 
 void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
@@ -978,6 +1468,17 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         for (int i = 0; i < m_pending.size(); i++)
             uploadMesh(m_meshes[i], m_pending[i], upd);
         m_rebuild = false;
+    }
+
+    // Create gizmo RHI resources (once)
+    if (m_gizmoRebuild && !m_gizmoPending.isEmpty()) {
+        destroyGizmoMeshes();
+        delete m_gizmoPipeline; m_gizmoPipeline = nullptr;
+        m_rhiGizmo.resize(m_gizmoPending.size());
+        for (int i = 0; i < m_gizmoPending.size(); i++)
+            uploadGizmoMesh(m_rhiGizmo[i], m_gizmoPending[i], upd);
+        m_gizmoPending.clear();
+        m_gizmoRebuild = false;
     }
 
     if (m_meshes.isEmpty()) {
@@ -1073,6 +1574,33 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         m_wirePipeline->create();
     }
 
+    // Gizmo pipeline (no depth test, always on top)
+    if (!m_gizmoPipeline && !m_rhiGizmo.isEmpty()) {
+        QRhiVertexInputLayout il;
+        il.setBindings({ QRhiVertexInputBinding(6 * sizeof(float)) });
+        il.setAttributes({
+            QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float3, 0),
+            QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float3, 3 * sizeof(float))
+        });
+
+        m_gizmoPipeline = rhi->newGraphicsPipeline();
+        QRhiGraphicsPipeline::TargetBlend gizmoBlend;
+        gizmoBlend.enable = false;
+        m_gizmoPipeline->setTargetBlends({gizmoBlend});
+        m_gizmoPipeline->setDepthTest(false);
+        m_gizmoPipeline->setDepthWrite(false);
+        m_gizmoPipeline->setStencilTest(false);
+        m_gizmoPipeline->setCullMode(QRhiGraphicsPipeline::None);
+        m_gizmoPipeline->setShaderStages({
+            { QRhiShaderStage::Vertex,   m_vs },
+            { QRhiShaderStage::Fragment, m_fs }
+        });
+        m_gizmoPipeline->setVertexInputLayout(il);
+        m_gizmoPipeline->setShaderResourceBindings(m_rhiGizmo[0].srb);
+        m_gizmoPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_gizmoPipeline->create();
+    }
+
     const QSize sz = renderTarget()->pixelSize();
     const QVector3D lightDir = QVector3D(0.6f, 1.f, 0.8f).normalized();
 
@@ -1103,6 +1631,24 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             wub.lightDir[0] = m.centroid.x(); wub.lightDir[1] = m.centroid.y();
             wub.lightDir[2] = m.centroid.z(); wub.lightDir[3] = 0.004f;
             upd->updateDynamicBuffer(m.wireUbuf, 0, sizeof(UBuf), &wub);
+        }
+    }
+
+    // Gizmo UBO updates
+    if (m_gizmoVisible && !m_rhiGizmo.isEmpty()) {
+        QMatrix4x4 gizmoMVP = rhi->clipSpaceCorrMatrix() * m_proj * m_view * m_gizmoTransform;
+        for (int i = 0; i < m_rhiGizmo.size(); ++i) {
+            auto &g = m_rhiGizmo[i];
+            UBuf ub{};
+            memcpy(ub.mvp,   gizmoMVP.constData(),           64);
+            memcpy(ub.model, m_gizmoTransform.constData(),    64);
+            bool highlighted = (m_gizmoHoveredPart == i)
+                || (m_gizmoHoveredPart == Origin && i >= PlaneXY && i <= PlaneYZ);
+            QVector3D c = highlighted ? g.highlightColor : g.color;
+            ub.color[0] = c.x(); ub.color[1] = c.y(); ub.color[2] = c.z();
+            ub.color[3] = 0.f; // flat color mode
+            memset(ub.lightDir, 0, 16); // no push
+            upd->updateDynamicBuffer(g.ubuf, 0, sizeof(UBuf), &ub);
         }
     }
 
@@ -1147,6 +1693,18 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         QRhiCommandBuffer::VertexInput vi3(sel.vbuf, 0);
         cb->setVertexInput(0, 1, &vi3, sel.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
         cb->drawIndexed(sel.indexCount);
+    }
+
+    // Gizmo rendering (always on top, no depth test)
+    if (m_gizmoVisible && m_gizmoPipeline && !m_rhiGizmo.isEmpty()) {
+        cb->setGraphicsPipeline(m_gizmoPipeline);
+        cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
+        for (auto &g : m_rhiGizmo) {
+            cb->setShaderResources(g.srb);
+            QRhiCommandBuffer::VertexInput gvi(g.vbuf, 0);
+            cb->setVertexInput(0, 1, &gvi, g.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
+            cb->drawIndexed(g.indexCount);
+        }
     }
 
     cb->endPass();
