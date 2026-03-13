@@ -319,6 +319,94 @@ QVariantList UsdDocument::getAttributes(const QString &primPath)
     return result;
 }
 
+QVariantList UsdDocument::getCommonAttributes(const QStringList &primPaths)
+{
+    QVariantList result;
+    if (!m_impl->stage || primPaths.isEmpty()) return result;
+
+    // Single prim: fall back to normal getAttributes
+    if (primPaths.size() == 1)
+        return getAttributes(primPaths.first());
+
+    // Collect attributes for each prim: name -> {typeName, value, isCustom}
+    // First prim determines the candidate set; intersect with subsequent prims.
+    struct AttrInfo {
+        QString typeName;
+        QString value;
+        bool isCustom;
+        bool mixed;
+    };
+
+    // Build map from first prim
+    QMap<QString, AttrInfo> common;
+    {
+        SdfPath sdfPath(primPaths[0].toStdString());
+        UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
+        if (!prim.IsValid()) return result;
+
+        for (const UsdAttribute &attr : prim.GetAttributes()) {
+            VtValue val;
+            attr.Get(&val);
+            QString name = QString::fromStdString(attr.GetName().GetString());
+            AttrInfo info;
+            info.typeName = QString::fromStdString(attr.GetTypeName().GetAsToken().GetString());
+            info.value    = vtValueToString(val);
+            info.isCustom = attr.IsCustom();
+            info.mixed    = false;
+            common[name]  = info;
+        }
+    }
+
+    // Intersect with remaining prims
+    for (int i = 1; i < primPaths.size(); ++i) {
+        SdfPath sdfPath(primPaths[i].toStdString());
+        UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
+        if (!prim.IsValid()) return {};
+
+        // Collect this prim's attribute names and values
+        QSet<QString> thisNames;
+        for (const UsdAttribute &attr : prim.GetAttributes()) {
+            VtValue val;
+            attr.Get(&val);
+            QString name = QString::fromStdString(attr.GetName().GetString());
+            QString typeName = QString::fromStdString(attr.GetTypeName().GetAsToken().GetString());
+            thisNames.insert(name);
+
+            auto it = common.find(name);
+            if (it != common.end()) {
+                // Check type match
+                if (it->typeName != typeName) {
+                    common.erase(it);
+                } else {
+                    // Check value match
+                    QString thisValue = vtValueToString(val);
+                    if (it->value != thisValue)
+                        it->mixed = true;
+                }
+            }
+        }
+
+        // Remove attributes not present in this prim
+        for (auto it = common.begin(); it != common.end(); ) {
+            if (!thisNames.contains(it.key()))
+                it = common.erase(it);
+            else
+                ++it;
+        }
+    }
+
+    // Build result list
+    for (auto it = common.constBegin(); it != common.constEnd(); ++it) {
+        QVariantMap entry;
+        entry["name"]     = it.key();
+        entry["typeName"] = it->typeName;
+        entry["value"]    = it->mixed ? QStringLiteral("mixed") : it->value;
+        entry["isCustom"] = it->isCustom;
+        result << entry;
+    }
+    return result;
+}
+
 bool UsdDocument::setAttribute(const QString &primPath,
                                const QString &attrName,
                                const QString &value)
@@ -335,6 +423,28 @@ bool UsdDocument::setAttribute(const QString &primPath,
     bool ok = setAttrFromString(attr, value);
     if (ok) emit stageModified();
     return ok;
+}
+
+bool UsdDocument::setAttributeMulti(const QStringList &primPaths,
+                                    const QString &attrName,
+                                    const QString &value)
+{
+    if (!m_impl->stage || primPaths.isEmpty()) return false;
+
+    bool anyOk = false;
+    for (const QString &path : primPaths) {
+        SdfPath sdfPath(path.toStdString());
+        UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
+        if (!prim.IsValid()) continue;
+
+        UsdAttribute attr = prim.GetAttribute(TfToken(attrName.toStdString()));
+        if (!attr.IsValid()) continue;
+
+        if (setAttrFromString(attr, value))
+            anyOk = true;
+    }
+    if (anyOk) emit stageModified();
+    return anyOk;
 }
 
 QVariantMap UsdDocument::getPrimInfo(const QString &primPath)

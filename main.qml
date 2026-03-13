@@ -16,16 +16,40 @@ ApplicationWindow {
     ListModel    { id: attrModel }
 
     property string selectedPrimPath: ""
+    property var selectedPrimPaths: []
     property bool _syncingSelection: false
 
     function loadAttrs(path) {
         root.selectedPrimPath = path
+        root.selectedPrimPaths = [path]
         attrModel.clear()
         let attrs = doc.getAttributes(path)
         for (let i = 0; i < attrs.length; i++) attrModel.append(attrs[i])
         let info = doc.getPrimInfo(path)
         primTypeLabel.text = info.typeName || ""
         statusText.text = path + "  (" + attrs.length + " 个属性)"
+    }
+
+    function loadAttrsMulti(paths) {
+        if (paths.length === 0) {
+            root.selectedPrimPath = ""
+            root.selectedPrimPaths = []
+            attrModel.clear()
+            primTypeLabel.text = ""
+            statusText.text = "就绪"
+            return
+        }
+        if (paths.length === 1) {
+            loadAttrs(paths[0])
+            return
+        }
+        root.selectedPrimPath = paths[paths.length - 1]
+        root.selectedPrimPaths = paths
+        attrModel.clear()
+        let attrs = doc.getCommonAttributes(paths)
+        for (let i = 0; i < attrs.length; i++) attrModel.append(attrs[i])
+        primTypeLabel.text = paths.length + " 个 Prim"
+        statusText.text = "已选中 " + paths.length + " 个 Prim  (" + attrs.length + " 个共有属性)"
     }
 
     // ── 工具栏 ───────────────────────────────────────────────
@@ -152,12 +176,30 @@ ApplicationWindow {
                         TapHandler {
                             acceptedModifiers: Qt.ControlModifier
                             onTapped: function(eventPoint, button) {
-                                let index = treeView.index(row, column)
-                                treeView.selectionModel.setCurrentIndex(index, ItemSelectionModel.Toggle | ItemSelectionModel.Rows)
+                                // Toggle path in our own selection list
+                                let paths = root.selectedPrimPaths.slice ? root.selectedPrimPaths.slice() : []
+                                let pi = paths.indexOf(model.path)
+                                if (pi >= 0)
+                                    paths.splice(pi, 1)
+                                else
+                                    paths.push(model.path)
+                                // Sync viewport highlighting (only works for mesh prims)
                                 root._syncingSelection = true
                                 viewport.togglePrimPath(model.path)
                                 root._syncingSelection = false
-                                loadAttrs(model.path)
+                                // Rebuild tree selection from paths
+                                sel.clearSelection()
+                                sel.clearCurrentIndex()
+                                for (let i = 0; i < paths.length; i++) {
+                                    let idx = doc.findPrimModelIndex(paths[i])
+                                    if (idx.valid) {
+                                        if (i === 0)
+                                            sel.setCurrentIndex(idx, ItemSelectionModel.Select | ItemSelectionModel.Rows)
+                                        else
+                                            sel.select(idx, ItemSelectionModel.Select | ItemSelectionModel.Rows)
+                                    }
+                                }
+                                loadAttrsMulti(paths)
                             }
                         }
                         TapHandler {
@@ -173,10 +215,10 @@ ApplicationWindow {
                             onDoubleTapped: {
                                 let index = treeView.index(row, column)
                                 treeView.selectionModel.setCurrentIndex(index, ItemSelectionModel.ClearAndSelect | ItemSelectionModel.Rows)
-                                loadAttrs(model.path)
                                 root._syncingSelection = true
                                 viewport.selectPrimPath(model.path)
                                 root._syncingSelection = false
+                                loadAttrs(model.path)
                             }
                         }
 
@@ -221,10 +263,10 @@ ApplicationWindow {
                                     let index = treeView.index(row, column)
                                     treeView.selectionModel.setCurrentIndex(index, ItemSelectionModel.ClearAndSelect | ItemSelectionModel.Rows)
                                     treeView.toggleExpanded(row)
-                                    loadAttrs(model.path)
                                     root._syncingSelection = true
                                     viewport.selectPrimPath(model.path)
                                     root._syncingSelection = false
+                                    loadAttrs(model.path)
                                 }
                             }
                         }
@@ -277,6 +319,7 @@ ApplicationWindow {
                         sel.clearSelection()
                         sel.clearCurrentIndex()
                         root.selectedPrimPath = ""
+                        root.selectedPrimPaths = []
                         attrModel.clear()
                         return
                     }
@@ -291,9 +334,7 @@ ApplicationWindow {
                                 sel.select(idx, ItemSelectionModel.Select | ItemSelectionModel.Rows)
                         }
                     }
-                    // Show attrs for last selected path, scroll to first
-                    let lastPath = paths[paths.length - 1]
-                    loadAttrs(lastPath)
+                    loadAttrsMulti(paths)
                     Qt.callLater(function() {
                         let firstIdx = doc.findPrimModelIndex(paths[0])
                         if (firstIdx.valid) {
@@ -337,7 +378,9 @@ ApplicationWindow {
                     RowLayout {
                         anchors { fill: parent; leftMargin: 8; rightMargin: 8 }
                         Label {
-                            text: root.selectedPrimPath !== "" ? root.selectedPrimPath : "未选中 Prim"
+                            text: root.selectedPrimPaths.length > 1
+                                ? (root.selectedPrimPaths.length + " 个 Prim 已选中")
+                                : (root.selectedPrimPath !== "" ? root.selectedPrimPath : "未选中 Prim")
                             color: "#cccccc"; font.bold: true; font.pixelSize: 11
                             elide: Text.ElideLeft; Layout.fillWidth: true
                         }
@@ -391,7 +434,9 @@ ApplicationWindow {
                             TextField {
                                 id: valField
                                 Layout.fillWidth: true
-                                text: model.value; font.pixelSize: 11; color: "#dcdcaa"
+                                text: model.value; font.pixelSize: 11
+                                color: model.value === "mixed" ? "#888888" : "#dcdcaa"
+                                font.italic: model.value === "mixed"
                                 // 捕获 model 角色，避免 signal handler 里 model 上下文失效
                                 property string _name:     model.name     || ""
                                 property string _typeName: model.typeName || ""
@@ -405,11 +450,16 @@ ApplicationWindow {
                                 onEditingFinished: {
                                     if (_busy || text === _value) return
                                     _busy = true
-                                    console.log(`root.selectedPrimPath, _name, text:  ${root.selectedPrimPath}, ${_name}, ${text}`)
-                                    let ok = doc.setAttribute(root.selectedPrimPath, _name, text)
+                                    let paths = root.selectedPrimPaths
+                                    let ok = false
+                                    if (paths.length > 1) {
+                                        ok = doc.setAttributeMulti(paths, _name, text)
+                                    } else {
+                                        ok = doc.setAttribute(root.selectedPrimPath, _name, text)
+                                    }
                                     if (ok) {
                                         statusText.text = "已更新: " + _name + " = " + text
-                                        Qt.callLater(function(){ loadAttrs(root.selectedPrimPath) })
+                                        Qt.callLater(function(){ if(root) loadAttrsMulti(root.selectedPrimPaths) })
                                     } else {
                                         statusText.text = "不支持直接编辑: " + _typeName
                                         text = _value

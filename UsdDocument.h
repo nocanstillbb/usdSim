@@ -37,10 +37,18 @@ public:
     // 获取某个 prim 的所有属性（返回 [{name, typeName, value, isCustom}, ...]）
     Q_INVOKABLE QVariantList getAttributes(const QString &primPath);
 
+    // 获取多个 prim 的共有属性，值不同时显示 "mixed"
+    Q_INVOKABLE QVariantList getCommonAttributes(const QStringList &primPaths);
+
     // 设置属性值（value 为字符串，由 C++ 端转换）
     Q_INVOKABLE bool setAttribute(const QString &primPath,
                                   const QString &attrName,
                                   const QString &value);
+
+    // 批量设置多个 prim 的同一属性
+    Q_INVOKABLE bool setAttributeMulti(const QStringList &primPaths,
+                                       const QString &attrName,
+                                       const QString &value);
 
     // 获取 prim 的基本信息
     Q_INVOKABLE QVariantMap getPrimInfo(const QString &primPath);
