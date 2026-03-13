@@ -690,30 +690,9 @@ void UsdViewportItem::mouseReleaseEvent(QMouseEvent *e)
         QPointF delta = e->position() - m_pressPos;
         if (delta.manhattanLength() < 3.0) {
             int hit = pickMesh(e->position());
-            bool changed = false;
-            if (e->modifiers() & Qt::ControlModifier) {
-                // Ctrl+click: toggle hit in selection set
-                if (hit >= 0) {
-                    if (m_selectedMeshes.contains(hit))
-                        m_selectedMeshes.remove(hit);
-                    else
-                        m_selectedMeshes.insert(hit);
-                    changed = true;
-                }
-            } else {
-                // Normal click: single select or clear
-                QSet<int> newSel;
-                if (hit >= 0) newSel.insert(hit);
-                if (newSel != m_selectedMeshes) {
-                    m_selectedMeshes = newSel;
-                    changed = true;
-                }
-            }
-            if (changed) {
-                m_meshDirty = true;
-                update();
-                emit selectedPrimPathsChanged();
-            }
+            QString hitPath = (hit >= 0 && hit < m_meshes.size())
+                ? m_meshes[hit].primPath : QString();
+            emit primClicked(hitPath, e->modifiers() & Qt::ControlModifier);
         }
     }
     m_dragging = false; m_panning = false; e->accept();
@@ -750,10 +729,27 @@ void UsdViewportItem::selectPrimPath(const QString &path)
     QSet<int> newSel;
     if (!path.isEmpty()) {
         for (int i = 0; i < m_meshes.size(); ++i) {
-            if (m_meshes[i].primPath == path) {
+            if (m_meshes[i].primPath.startsWith(path)) {
                 newSel.insert(i);
-                break;
             }
+        }
+    }
+    if (newSel != m_selectedMeshes) {
+        m_selectedMeshes = newSel;
+        m_meshDirty = true;
+        update();
+        emit selectedPrimPathsChanged();
+    }
+}
+
+void UsdViewportItem::selectPrimPaths(const QStringList &paths)
+{
+    QSet<int> newSel;
+    for (const QString &path : paths) {
+        if (path.isEmpty()) continue;
+        for (int i = 0; i < m_meshes.size(); ++i) {
+            if (m_meshes[i].primPath.startsWith(path))
+                newSel.insert(i);
         }
     }
     if (newSel != m_selectedMeshes) {
@@ -767,18 +763,28 @@ void UsdViewportItem::selectPrimPath(const QString &path)
 void UsdViewportItem::togglePrimPath(const QString &path)
 {
     if (path.isEmpty()) return;
-    int idx = -1;
+
+    // Collect all mesh indices matching this path (or children)
+    QSet<int> matched;
     for (int i = 0; i < m_meshes.size(); ++i) {
-        if (m_meshes[i].primPath == path) {
-            idx = i;
+        if (m_meshes[i].primPath.startsWith(path))
+            matched.insert(i);
+    }
+    if (matched.isEmpty()) return;
+
+    // If ALL matched are already selected, remove them all; otherwise add them all
+    bool allSelected = true;
+    for (int idx : matched) {
+        if (!m_selectedMeshes.contains(idx)) {
+            allSelected = false;
             break;
         }
     }
-    if (idx < 0) return;
-    if (m_selectedMeshes.contains(idx))
-        m_selectedMeshes.remove(idx);
+    if (allSelected)
+        m_selectedMeshes -= matched;
     else
-        m_selectedMeshes.insert(idx);
+        m_selectedMeshes += matched;
+
     m_meshDirty = true;
     update();
     emit selectedPrimPathsChanged();

@@ -17,7 +17,7 @@ ApplicationWindow {
 
     property string selectedPrimPath: ""
     property var selectedPrimPaths: []
-    property bool _syncingSelection: false
+    property bool _syncingSelection: false //用于跳过3d viewport中选中prim, 同步到prim TreeView的flag
 
     function loadAttrs(path) {
         root.selectedPrimPath = path
@@ -183,9 +183,9 @@ ApplicationWindow {
                                     paths.splice(pi, 1)
                                 else
                                     paths.push(model.path)
-                                // Sync viewport highlighting (only works for mesh prims)
+                                // Sync viewport to match the final paths list
                                 root._syncingSelection = true
-                                viewport.togglePrimPath(model.path)
+                                viewport.selectPrimPaths(paths)
                                 root._syncingSelection = false
                                 // Rebuild tree selection from paths
                                 sel.clearSelection()
@@ -311,6 +311,52 @@ ApplicationWindow {
                 id: viewport
                 anchors.fill: parent
                 document: doc
+
+                onPrimClicked: function(primPath, ctrlHeld) {
+                    let paths
+                    if (ctrlHeld) {
+                        // Ctrl+click in viewport: toggle this path
+                        paths = root.selectedPrimPaths.slice ? root.selectedPrimPaths.slice() : []
+                        if (primPath !== "") {
+                            let pi = paths.indexOf(primPath)
+                            if (pi >= 0)
+                                paths.splice(pi, 1)
+                            else
+                                paths.push(primPath)
+                        }
+                    } else {
+                        // Normal click in viewport: single select or clear
+                        paths = primPath !== "" ? [primPath] : []
+                    }
+                    // Sync viewport highlight
+                    root._syncingSelection = true
+                    viewport.selectPrimPaths(paths)
+                    root._syncingSelection = false
+                    // Rebuild tree selection
+                    sel.clearSelection()
+                    sel.clearCurrentIndex()
+                    for (let i = 0; i < paths.length; i++) {
+                        let idx = doc.findPrimModelIndex(paths[i])
+                        if (idx.valid) {
+                            primTree.expandToIndex(idx)
+                            if (i === 0)
+                                sel.setCurrentIndex(idx, ItemSelectionModel.Select | ItemSelectionModel.Rows)
+                            else
+                                sel.select(idx, ItemSelectionModel.Select | ItemSelectionModel.Rows)
+                        }
+                    }
+                    loadAttrsMulti(paths)
+                    if (paths.length > 0) {
+                        Qt.callLater(function() {
+                            let firstIdx = doc.findPrimModelIndex(paths[0])
+                            if (firstIdx.valid) {
+                                let row = primTree.rowAtIndex(firstIdx)
+                                if (row >= 0)
+                                    primTree.positionViewAtRow(row, Qt.AlignVCenter)
+                            }
+                        })
+                    }
+                }
 
                 onSelectedPrimPathsChanged: {
                     if (root._syncingSelection) return
