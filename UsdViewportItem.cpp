@@ -667,6 +667,7 @@ void UsdViewportItem::mousePressEvent(QMouseEvent *e)
 void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
 {
     if (!m_dragging) return;
+    m_meshDirty = true;
     QPointF d = e->position() - m_lastMouse; m_lastMouse = e->position();
 
     if (m_panning) {
@@ -719,9 +720,11 @@ void UsdViewportItem::mouseReleaseEvent(QMouseEvent *e)
 }
 void UsdViewportItem::wheelEvent(QWheelEvent *e)
 {
-    m_dist -= e->angleDelta().y() * 0.02f;
-    if (m_dist < 0.01f) m_dist = 0.01f;
+    m_dist -= e->angleDelta().y() * 0.004f;
+    if (m_dist < 0.004f) m_dist = 0.004f;
+    m_meshDirty = true;
     updateCamera(); update(); e->accept();
+
 }
 void UsdViewportItem::geometryChange(const QRectF &n, const QRectF &o)
 {
@@ -1142,3 +1145,4 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
 
     cb->endPass();
 }
+

@@ -43,9 +43,12 @@ public:
     QMatrix4x4 projMatrix() const { return m_proj; }
     QSet<int> selectedMeshes() const { return m_selectedMeshes; }
 
+
+
 signals:
     void documentChanged();
     void selectedPrimPathsChanged();
+
 
 protected:
     void mousePressEvent(QMouseEvent *e) override;
