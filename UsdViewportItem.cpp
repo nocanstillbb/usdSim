@@ -1,5 +1,7 @@
 #include "UsdViewportItem.h"
 #include "UsdDocument.h"
+#include "UndoStack.h"
+#include "UndoCommands.h"
 
 #include <QFile>
 #include <QMouseEvent>
@@ -916,6 +918,8 @@ void UsdViewportItem::onDocumentChanged()
         m_selectedMeshes.clear();
         emit selectedPrimPathsChanged();
     }
+    // Recompute gizmo position from updated mesh transforms
+    updateGizmoPosition();
     update();
 }
 
@@ -1476,7 +1480,7 @@ void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
                     QVector3D newLocal = it.value() + localDelta;
                     QString val = QString("(%1, %2, %3)")
                         .arg(double(newLocal.x())).arg(double(newLocal.y())).arg(double(newLocal.z()));
-                    m_doc->setAttribute(m_meshes[idx].primPath,
+                    m_doc->setAttributeInternal(m_meshes[idx].primPath,
                                         QStringLiteral("xformOp:translate"), val);
                 }
                 emit gizmoDragUpdated();
@@ -1515,7 +1519,7 @@ void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
 
                     QString val = QString("(%1, %2, %3)")
                         .arg(double(newRot.x())).arg(double(newRot.y())).arg(double(newRot.z()));
-                    m_doc->setAttribute(m_meshes[idx].primPath,
+                    m_doc->setAttributeInternal(m_meshes[idx].primPath,
                                         QStringLiteral("xformOp:rotateXYZ"), val);
 
                     // Update visual transform from USD
@@ -1602,7 +1606,7 @@ void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
 
                     QString val = QString("(%1, %2, %3)")
                         .arg(double(newScale.x())).arg(double(newScale.y())).arg(double(newScale.z()));
-                    m_doc->setAttribute(m_meshes[idx].primPath,
+                    m_doc->setAttributeInternal(m_meshes[idx].primPath,
                                         QStringLiteral("xformOp:scale"), val);
 
                     // Update visual transform from USD
@@ -1651,6 +1655,46 @@ void UsdViewportItem::mouseReleaseEvent(QMouseEvent *e)
 {
     // Gizmo drag finished
     if (m_gizmoDragPart >= 0) {
+        // Build undo command from pre-drag state vs current values
+        if (m_doc) {
+            QVector<GizmoTransformCommand::Entry> entries;
+            if (m_gizmoMode == GizmoModeTranslate) {
+                for (auto it = m_gizmoDragStartLocalTranslates.constBegin();
+                     it != m_gizmoDragStartLocalTranslates.constEnd(); ++it) {
+                    int idx = it.key();
+                    if (idx < 0 || idx >= m_meshes.size()) continue;
+                    QVector3D old = it.value();
+                    QString oldVal = QString("(%1, %2, %3)").arg(double(old.x())).arg(double(old.y())).arg(double(old.z()));
+                    QString newVal = m_doc->readAttributeValue(m_meshes[idx].primPath, QStringLiteral("xformOp:translate"));
+                    entries.append({m_meshes[idx].primPath, QStringLiteral("xformOp:translate"), oldVal, newVal});
+                }
+            } else if (m_gizmoMode == GizmoModeRotate) {
+                for (auto it = m_gizmoDragStartRotations.constBegin();
+                     it != m_gizmoDragStartRotations.constEnd(); ++it) {
+                    int idx = it.key();
+                    if (idx < 0 || idx >= m_meshes.size()) continue;
+                    QVector3D old = it.value();
+                    QString oldVal = QString("(%1, %2, %3)").arg(double(old.x())).arg(double(old.y())).arg(double(old.z()));
+                    QString newVal = m_doc->readAttributeValue(m_meshes[idx].primPath, QStringLiteral("xformOp:rotateXYZ"));
+                    entries.append({m_meshes[idx].primPath, QStringLiteral("xformOp:rotateXYZ"), oldVal, newVal});
+                }
+            } else if (m_gizmoMode == GizmoModeScale) {
+                for (auto it = m_gizmoDragStartScales.constBegin();
+                     it != m_gizmoDragStartScales.constEnd(); ++it) {
+                    int idx = it.key();
+                    if (idx < 0 || idx >= m_meshes.size()) continue;
+                    QVector3D old = it.value();
+                    QString oldVal = QString("(%1, %2, %3)").arg(double(old.x())).arg(double(old.y())).arg(double(old.z()));
+                    QString newVal = m_doc->readAttributeValue(m_meshes[idx].primPath, QStringLiteral("xformOp:scale"));
+                    entries.append({m_meshes[idx].primPath, QStringLiteral("xformOp:scale"), oldVal, newVal});
+                }
+            }
+            if (!entries.isEmpty()) {
+                auto cmd = std::make_unique<GizmoTransformCommand>(m_doc, entries);
+                m_doc->undoStack()->pushNoRedo(std::move(cmd));
+            }
+        }
+
         // Reset drag state first so stageModified can trigger rebuild.
         m_gizmoDragPart = -1;
         m_gizmoDragStartTranslations.clear();
