@@ -27,6 +27,7 @@
 #include <pxr/usd/usdGeom/capsule.h>
 #include <pxr/usd/usdGeom/plane.h>
 #include <pxr/usd/usdGeom/metrics.h>
+#include <pxr/usd/usdGeom/imageable.h>
 #include <pxr/base/gf/matrix4d.h>
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/vt/array.h>
@@ -940,6 +941,11 @@ void UsdViewportItem::buildMeshes()
 
     int meshColorIndex = 0;
     for (const UsdPrim &prim : stage->Traverse()) {
+        // Skip prims whose computed visibility is "invisible"
+        UsdGeomImageable img(prim);
+        if (img && img.ComputeVisibility() == UsdGeomTokens->invisible)
+            continue;
+
         const TfToken type = prim.GetTypeName();
 
         QVector<float>   verts;

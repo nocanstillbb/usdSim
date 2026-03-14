@@ -172,6 +172,42 @@ QString RemovePrimCommand::text() const
 }
 
 // ══════════════════════════════════════════════════════════════
+//  SetPrimActiveCommand
+// ══════════════════════════════════════════════════════════════
+
+SetPrimActiveCommand::SetPrimActiveCommand(UsdDocument *doc,
+                                           const QVector<Entry> &entries)
+    : m_doc(doc), m_entries(entries)
+{
+}
+
+void SetPrimActiveCommand::undo()
+{
+    for (const Entry &e : m_entries)
+        m_doc->setVisibilityRaw(e.primPath, e.oldVisible);
+    m_doc->refreshVisibilityTree();
+    emit m_doc->stageModified();
+}
+
+void SetPrimActiveCommand::redo()
+{
+    for (const Entry &e : m_entries)
+        m_doc->setVisibilityRaw(e.primPath, e.newVisible);
+    m_doc->refreshVisibilityTree();
+    emit m_doc->stageModified();
+}
+
+QString SetPrimActiveCommand::text() const
+{
+    if (m_entries.isEmpty())
+        return QStringLiteral("切换可见性");
+    // Target prim is the last entry (ancestors come first)
+    QString name = m_entries.last().primPath.section('/', -1);
+    return m_entries.last().newVisible ? QStringLiteral("显示 %1").arg(name)
+                                      : QStringLiteral("隐藏 %1").arg(name);
+}
+
+// ══════════════════════════════════════════════════════════════
 //  SelectionCommand
 // ══════════════════════════════════════════════════════════════
 
