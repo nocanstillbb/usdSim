@@ -67,6 +67,9 @@ public:
                              const QString &typeName);
     Q_INVOKABLE bool removePrim(const QString &primPath);
 
+    // 设置 prim 的 visibility — pushes undo command
+    Q_INVOKABLE bool setPrimVisibility(const QString &primPath, bool visible);
+
     // 属性模型操作（全量加载 / 增量刷新 / 清空）
     Q_INVOKABLE void loadAttributes(const QStringList &primPaths);
     Q_INVOKABLE void refreshAttributes(const QStringList &primPaths);
@@ -89,6 +92,12 @@ public:
                          const QString &name,
                          const QString &typeName);
     bool removePrimInternal(const QString &primPath);
+    bool setPrimVisibilityInternal(const QString &primPath, bool visible);
+
+    // Low-level: set USD visibility attr only, no signals/tree update
+    bool setVisibilityRaw(const QString &primPath, bool visible);
+    // Refresh the entire tree model's visibility state
+    void refreshVisibilityTree();
 
     // Read current attribute value as string (for capturing "before" state)
     QString readAttributeValue(const QString &primPath, const QString &attrName);

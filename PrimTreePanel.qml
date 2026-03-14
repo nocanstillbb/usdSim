@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Effects
 
 Rectangle {
     id: panel
@@ -72,6 +73,8 @@ Rectangle {
                 id: primDelegate
                 readonly property real indentation: 15
                 readonly property real padding: 15
+                readonly property real eyeColumnWidth: 70
+                readonly property real typeColumnWidth: 70
                 required property TreeView treeView
                 required property bool isTreeNode
                 required property bool expanded
@@ -161,6 +164,7 @@ Rectangle {
                     }
                 }
 
+                // Column 1: Tree indicator + Name
                 Label {
                     id: indicator
                     x: padding + (depth * indentation)
@@ -186,10 +190,63 @@ Rectangle {
                     id: label
                     x: padding + (isTreeNode ? (depth + 1) * indentation : 0)
                     anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - padding - x
+                    width: parent.width - x - eyeColumnWidth - typeColumnWidth
                     clip: true
+                    elide: Text.ElideRight
                     color: "#aaaaaa"; font.bold: true; font.pixelSize: 11
-                    text: `${model.name} [${model.typeName}]`
+                    text: model.name
+                }
+
+                // Column 2: isActive eye icon
+                Item {
+                    id: eyeColumn
+                    width: eyeColumnWidth
+                    height: parent.height
+                    anchors.right: typeColumn.left
+
+                    Image {
+                        id: eyeImg
+                        source: model.isActive ? "icons/eye-solid.svg" : "icons/eye-slash-solid.svg"
+                        anchors.centerIn: parent
+                        width: 14; height: 14
+                        sourceSize: Qt.size(14, 14)
+                        fillMode: Image.PreserveAspectFit
+                        visible: false
+                    }
+                    MultiEffect {
+                        anchors.fill: eyeImg
+                        source: eyeImg
+                        colorization: 1.0
+                        colorizationColor: model.isActive ? "#aaaaaa" : "#555555"
+                    }
+
+                    TapHandler {
+                        onTapped: {
+                            let path = model.path
+                            let newVisible = !model.isActive
+                            panel.document.setPrimVisibility(path, newVisible)
+                        }
+                    }
+                }
+
+                // Column 3: typeName
+                Item {
+                    id: typeColumn
+                    width: typeColumnWidth
+                    height: parent.height
+                    anchors.right: parent.right
+
+                    Label {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.rightMargin: 4
+                        horizontalAlignment: Text.AlignLeft
+                        clip: true
+                        text: model.typeName
+                        color: "#888888"
+                        font.pixelSize: 10
+                    }
                 }
             }
         }
@@ -237,7 +294,7 @@ Rectangle {
                 spacing: 10
 
                 Label { text: "添加 Prim"; color: "#ffffff"; font.pixelSize: 14; font.bold: true }
-                Label { text: "父: " + addPrimOverlay.parentPath; color: "#888888"; font.pixelSize: 11; elide: Text.ElideLeft }
+                Label { text: "父: " + addPrimOverlay.parentPath; color: "#888888"; font.pixelSize: 11; elide: Text.ElideRight }
 
                 RowLayout {
                     Layout.fillWidth: true

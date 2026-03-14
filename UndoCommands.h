@@ -103,6 +103,29 @@ private:
     void *m_backupLayer = nullptr; // SdfLayerRefPtr* allocated on heap
 };
 
+// ── SetPrimActiveCommand ─────────────────────────────────────
+// Toggles visibility on target prim (+ ancestors when showing).
+class SetPrimActiveCommand : public UndoCommand
+{
+public:
+    struct Entry {
+        QString primPath;
+        bool oldVisible;   // was "inherited"?
+        bool newVisible;   // target state
+    };
+
+    SetPrimActiveCommand(UsdDocument *doc,
+                         const QVector<Entry> &entries);
+
+    void undo() override;
+    void redo() override;
+    QString text() const override;
+
+private:
+    UsdDocument *m_doc;
+    QVector<Entry> m_entries;
+};
+
 // ── SelectionCommand ─────────────────────────────────────────
 class SelectionCommand : public UndoCommand
 {

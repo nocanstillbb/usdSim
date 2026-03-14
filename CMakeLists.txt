@@ -42,6 +42,7 @@ qt_add_qml_module(apptest_qmlcmp
     URI test_qmlcmp
     VERSION 1.0
     QML_FILES main.qml PrimTreePanel.qml ViewportPanel.qml AttributePanel.qml HistoryPanel.qml
+    RESOURCES icons/eye-solid.svg icons/eye-slash-solid.svg
 )
 
 qt_add_shaders(apptest_qmlcmp "viewport_shaders"

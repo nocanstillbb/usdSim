@@ -13,6 +13,7 @@
 #include <pxr/usd/usd/primRange.h>
 #include <pxr/usd/sdf/path.h>
 #include <pxr/usd/sdf/types.h>
+#include <pxr/usd/usdGeom/imageable.h>
 #include <pxr/base/vt/value.h>
 #include <pxr/base/gf/vec2f.h>
 #include <pxr/base/gf/vec3f.h>
@@ -55,6 +56,20 @@ public:
         return findPath(QModelIndex(), path);
     }
 
+    // Incremental update: recompute visibility for a subtree rooted at `path`
+    void updateVisibility(const QString &path, const UsdStageRefPtr &stage) {
+        QModelIndex idx = indexForPath(path);
+        if (!idx.isValid()) return;
+        updateVisibilityRecursive(idx, stage);
+    }
+
+    // Refresh visibility for the entire tree
+    void updateVisibilityAll(const UsdStageRefPtr &stage) {
+        const int rc = rowCount(QModelIndex());
+        for (int r = 0; r < rc; ++r)
+            updateVisibilityRecursive(index(r, 0, QModelIndex()), stage);
+    }
+
     void rebuild(const UsdStageRefPtr &stage) {
         auto root = std::make_shared<NodeProxy>();
         if (stage) {
@@ -64,7 +79,10 @@ public:
                 info->name     = prim.GetName().GetString();
                 info->path     = prim.GetPath().GetString();
                 info->typeName = prim.GetTypeName().GetString();
-                info->isActive = prim.IsActive();
+
+                UsdGeomImageable imageable(prim);
+                info->isActive = !imageable
+                    || imageable.ComputeVisibility() != UsdGeomTokens->invisible;
 
                 auto node = std::make_shared<NodeProxy>(info);
                 nodeMap[info->path] = node;
@@ -93,6 +111,23 @@ private:
                 return found;
         }
         return {};
+    }
+
+    void updateVisibilityRecursive(const QModelIndex &idx, const UsdStageRefPtr &stage) {
+        auto *node = static_cast<NodeProxy *>(idx.internalPointer());
+        if (node && node->instance()) {
+            SdfPath sp(node->instance()->path);
+            UsdPrim prim = stage->GetPrimAtPath(sp);
+            if (prim.IsValid()) {
+                UsdGeomImageable img(prim);
+                node->instance()->isActive = !img
+                    || img.ComputeVisibility() != UsdGeomTokens->invisible;
+            }
+            emit dataChanged(idx, idx);
+        }
+        const int rc = rowCount(idx);
+        for (int r = 0; r < rc; ++r)
+            updateVisibilityRecursive(index(r, 0, idx), stage);
     }
 };
 
@@ -245,7 +280,7 @@ void UsdDocument::refreshPrimPaths()
             info->name     = prim.GetName().GetString();
             info->path     = prim.GetPath().GetString();
             info->typeName = prim.GetTypeName().GetString();
-            info->isActive = prim.IsActive();
+            info->isActive = true; // list model doesn't need visibility
             m_impl->primModel->appendItemNotNotify(info);
         }
     }
@@ -449,7 +484,12 @@ bool UsdDocument::setAttributeInternal(const QString &primPath,
     if (!attr.IsValid()) return false;
 
     bool ok = setAttrFromString(attr, value);
-    if (ok) emit stageModified();
+    if (ok) {
+        // Sync tree eye icon when visibility attribute changes
+        if (attrName == QStringLiteral("visibility"))
+            m_impl->primTreeModel->updateVisibility(primPath, m_impl->stage);
+        emit stageModified();
+    }
     return ok;
 }
 
@@ -559,6 +599,122 @@ bool UsdDocument::removePrimInternal(const QString &primPath)
         emit stageModified();
     }
     return ok;
+}
+
+bool UsdDocument::setPrimVisibility(const QString &primPath, bool visible)
+{
+    if (!m_impl->stage) return false;
+
+    SdfPath sdfPath(primPath.toStdString());
+    UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
+    if (!prim.IsValid()) return false;
+
+    auto readOwnVis = [](const UsdPrim &p) -> bool {
+        UsdGeomImageable img(p);
+        if (!img) return true;
+        TfToken vis;
+        if (img.GetVisibilityAttr().Get(&vis))
+            return vis != UsdGeomTokens->invisible;
+        return true;
+    };
+
+    // Map: primPath → {oldVisible, newVisible}. Later writes override newVisible.
+    QMap<QString, QPair<bool,bool>> entryMap;
+
+    auto addEntry = [&](const UsdPrim &p, bool newVis) {
+        QString path = QString::fromStdString(p.GetPath().GetString());
+        auto it = entryMap.find(path);
+        if (it != entryMap.end()) {
+            it->second = newVis; // keep original oldVisible, update newVisible
+        } else {
+            entryMap.insert(path, {readOwnVis(p), newVis});
+        }
+    };
+
+    if (visible) {
+        // Build chain: target → parent → ... → topmost computed-invisible ancestor
+        QVector<UsdPrim> chain;
+        chain.append(prim);
+        UsdPrim cur = prim.GetParent();
+        while (cur && !cur.IsPseudoRoot()) {
+            UsdGeomImageable img(cur);
+            if (img && img.ComputeVisibility() == UsdGeomTokens->invisible) {
+                chain.append(cur);
+                cur = cur.GetParent();
+            } else {
+                break;
+            }
+        }
+
+        if (chain.size() == 1) {
+            // No invisible ancestors — just toggle self, preserve children
+            addEntry(prim, true);
+        } else {
+            // Recursive split: process top-down.
+            // At each ancestor level set node→inherited, ALL children→invisible.
+            // Path nodes appear twice — map keeps the last (inherited) value.
+            for (int i = chain.size() - 1; i >= 0; --i) {
+                UsdPrim node = chain[i];
+                addEntry(node, true); // inherited
+                for (const UsdPrim &child : node.GetChildren())
+                    addEntry(child, false); // invisible
+            }
+        }
+    } else {
+        addEntry(prim, false);
+    }
+
+    // Convert map to entries, skipping no-ops
+    QVector<SetPrimActiveCommand::Entry> entries;
+    for (auto it = entryMap.cbegin(); it != entryMap.cend(); ++it) {
+        if (it->first != it->second) {
+            SetPrimActiveCommand::Entry e;
+            e.primPath = it.key();
+            e.oldVisible = it->first;
+            e.newVisible = it->second;
+            entries.append(e);
+        }
+    }
+
+    if (entries.isEmpty()) return true;
+    auto cmd = std::make_unique<SetPrimActiveCommand>(this, entries);
+    m_undoStack->push(std::move(cmd));
+    return true;
+}
+
+bool UsdDocument::setPrimVisibilityInternal(const QString &primPath, bool visible)
+{
+    if (!m_impl->stage) return false;
+    if (!setVisibilityRaw(primPath, visible)) return false;
+
+    // Update tree: this node + all descendants (inherited visibility propagates)
+    m_impl->primTreeModel->updateVisibility(primPath, m_impl->stage);
+
+    emit stageModified();
+    return true;
+}
+
+bool UsdDocument::setVisibilityRaw(const QString &primPath, bool visible)
+{
+    if (!m_impl->stage) return false;
+
+    SdfPath sdfPath(primPath.toStdString());
+    UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
+    if (!prim.IsValid()) return false;
+
+    UsdGeomImageable imageable(prim);
+    if (!imageable) return false;
+
+    imageable.GetVisibilityAttr().Set(
+        visible ? UsdGeomTokens->inherited : UsdGeomTokens->invisible
+    );
+    return true;
+}
+
+void UsdDocument::refreshVisibilityTree()
+{
+    if (!m_impl->stage) return;
+    m_impl->primTreeModel->updateVisibilityAll(m_impl->stage);
 }
 
 // ---- 属性模型操作 ----
