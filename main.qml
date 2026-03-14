@@ -150,8 +150,8 @@ ApplicationWindow {
         // 左栏：Prim 树
         PrimTreePanel {
             id: primTreePanel
-            SplitView.preferredWidth: 220
-            SplitView.minimumWidth:   150
+            SplitView.preferredWidth: 320
+            SplitView.minimumWidth:   220
             document: doc
         }
 
