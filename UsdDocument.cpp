@@ -1,4 +1,6 @@
 #include "UsdDocument.h"
+#include "UndoStack.h"
+#include "UndoCommands.h"
 #include "PrimInfo.h"
 #include "AttrInfo.h"
 #include <prism/qt/core/hpp/prismModelListProxy.hpp>
@@ -199,6 +201,7 @@ UsdDocument::UsdDocument(QObject *parent)
     m_impl->primModel     = new PrimModel();
     m_impl->primTreeModel = new PrimTreeModel();
     m_impl->attrModel     = new AttrModel();
+    m_undoStack = new UndoStack(this);
 }
 
 QObject *UsdDocument::primModel() const
@@ -273,6 +276,7 @@ bool UsdDocument::open(const QString &path)
     m_filePath = localPath;
     m_isOpen = true;
     m_errorString.clear();
+    m_undoStack->clear();
 
     emit filePathChanged();
     emit isOpenChanged();
@@ -300,6 +304,7 @@ void UsdDocument::close()
     m_impl->stage.Reset();
     m_filePath.clear();
     m_isOpen = false;
+    m_undoStack->clear();
     refreshPrimPaths();     // clears m_primPaths, resets list+tree models, emits primPathsChanged
     emit filePathChanged();
     emit isOpenChanged();
@@ -422,6 +427,20 @@ bool UsdDocument::setAttribute(const QString &primPath,
 {
     if (!m_impl->stage) return false;
 
+    // Capture old value for undo
+    QString oldValue = readAttributeValue(primPath, attrName);
+
+    auto cmd = std::make_unique<SetAttributeCommand>(this, primPath, attrName, oldValue, value);
+    m_undoStack->push(std::move(cmd));
+    return true;
+}
+
+bool UsdDocument::setAttributeInternal(const QString &primPath,
+                                        const QString &attrName,
+                                        const QString &value)
+{
+    if (!m_impl->stage) return false;
+
     SdfPath sdfPath(primPath.toStdString());
     UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
     if (!prim.IsValid()) return false;
@@ -437,6 +456,22 @@ bool UsdDocument::setAttribute(const QString &primPath,
 bool UsdDocument::setAttributeMulti(const QStringList &primPaths,
                                     const QString &attrName,
                                     const QString &value)
+{
+    if (!m_impl->stage || primPaths.isEmpty()) return false;
+
+    // Capture old values for undo
+    QHash<QString, QString> oldValues;
+    for (const QString &path : primPaths)
+        oldValues[path] = readAttributeValue(path, attrName);
+
+    auto cmd = std::make_unique<SetAttributeMultiCommand>(this, primPaths, attrName, oldValues, value);
+    m_undoStack->push(std::move(cmd));
+    return true;
+}
+
+bool UsdDocument::setAttributeMultiInternal(const QStringList &primPaths,
+                                             const QString &attrName,
+                                             const QString &value)
 {
     if (!m_impl->stage || primPaths.isEmpty()) return false;
 
@@ -484,11 +519,23 @@ bool UsdDocument::addPrim(const QString &parentPath,
 {
     if (!m_impl->stage) return false;
 
+    auto cmd = std::make_unique<AddPrimCommand>(this, parentPath, name, typeName);
+    m_undoStack->push(std::move(cmd));
+    return true;
+}
+
+bool UsdDocument::addPrimInternal(const QString &parentPath,
+                                   const QString &name,
+                                   const QString &typeName)
+{
+    if (!m_impl->stage) return false;
+
     SdfPath newPath = SdfPath(parentPath.toStdString()).AppendChild(TfToken(name.toStdString()));
     UsdPrim prim = m_impl->stage->DefinePrim(newPath, TfToken(typeName.toStdString()));
     if (!prim.IsValid()) return false;
 
     refreshPrimPaths();
+    emit stageModified();
     return true;
 }
 
@@ -496,8 +543,21 @@ bool UsdDocument::removePrim(const QString &primPath)
 {
     if (!m_impl->stage) return false;
 
+    // RemovePrimCommand backs up subtree in constructor, then calls redo() which does removePrimInternal()
+    auto cmd = std::make_unique<RemovePrimCommand>(this, primPath);
+    m_undoStack->push(std::move(cmd));
+    return true;
+}
+
+bool UsdDocument::removePrimInternal(const QString &primPath)
+{
+    if (!m_impl->stage) return false;
+
     bool ok = m_impl->stage->RemovePrim(SdfPath(primPath.toStdString()));
-    if (ok) refreshPrimPaths();
+    if (ok) {
+        refreshPrimPaths();
+        emit stageModified();
+    }
     return ok;
 }
 
@@ -588,4 +648,32 @@ QModelIndex UsdDocument::findPrimModelIndex(const QString &path) const
 {
     if (!m_impl->primTreeModel) return {};
     return m_impl->primTreeModel->indexForPath(path);
+}
+
+// ---- Undo / Redo ----
+void UsdDocument::undo()
+{
+    m_undoStack->undo();
+}
+
+void UsdDocument::redo()
+{
+    m_undoStack->redo();
+}
+
+// ---- Read attribute value as string ----
+QString UsdDocument::readAttributeValue(const QString &primPath, const QString &attrName)
+{
+    if (!m_impl->stage) return {};
+
+    SdfPath sdfPath(primPath.toStdString());
+    UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
+    if (!prim.IsValid()) return {};
+
+    UsdAttribute attr = prim.GetAttribute(TfToken(attrName.toStdString()));
+    if (!attr.IsValid()) return {};
+
+    VtValue val;
+    attr.Get(&val);
+    return vtValueToString(val);
 }

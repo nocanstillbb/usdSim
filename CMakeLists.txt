@@ -27,6 +27,10 @@ qt_add_executable(apptest_qmlcmp
     main.cpp
     PrimInfo.h
     AttrInfo.h
+    UndoStack.h
+    UndoStack.cpp
+    UndoCommands.h
+    UndoCommands.cpp
     UsdDocument.h
     UsdDocument.cpp
     UsdViewportItem.h
@@ -37,7 +41,7 @@ qt_add_executable(apptest_qmlcmp
 qt_add_qml_module(apptest_qmlcmp
     URI test_qmlcmp
     VERSION 1.0
-    QML_FILES main.qml
+    QML_FILES main.qml PrimTreePanel.qml ViewportPanel.qml AttributePanel.qml HistoryPanel.qml
 )
 
 qt_add_shaders(apptest_qmlcmp "viewport_shaders"
