@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import UsdBrowser 1.0
 
 ApplicationWindow {
@@ -73,10 +74,10 @@ ApplicationWindow {
 
             Repeater {
                 model: [
-                    { label: "打开",   enabled: true,        action: function(){ fileOpenOverlay.show(false) } },
+                    { label: "打开",   enabled: true,        action: function(){ openDialog.open() } },
                     { label: "测试文件", enabled: true,      action: function(){ doc.open("/home/cnf2025581067/source/repos/test_qmlmcp_server/test_scene.usda") } },
                     { label: "保存",   enabled: doc.isOpen,  action: function(){ doc.save(); statusText.text = "已保存" } },
-                    { label: "另存为", enabled: doc.isOpen,  action: function(){ fileOpenOverlay.show(true) } },
+                    { label: "另存为", enabled: doc.isOpen,  action: function(){ saveAsDialog.open() } },
                     { label: "关闭",   enabled: doc.isOpen,  action: function(){
                         doc.close(); doc.clearAttributes()
                         root.selectedPrimPath = ""; root.selectedPrimPaths = []
@@ -247,71 +248,27 @@ ApplicationWindow {
         }
     }
 
-    // ══════════════════════════════════════════════════════════
-    //  自定义文件对话框（替代系统 FileDialog）
-    // ══════════════════════════════════════════════════════════
-    Rectangle {
-        id: fileOpenOverlay
-        anchors.fill: parent; color: "#99000000"; visible: false; z: 200
+    // ── 文件对话框 ────────────────────────────────────────────
+    FileDialog {
+        id: openDialog
+        title: "打开 USD 文件"
+        nameFilters: ["USD 文件 (*.usd *.usda *.usdc *.usdz)", "所有文件 (*)"]
+        onAccepted: {
+            let path = selectedFile.toString().replace("file://", "")
+            let ok = doc.open(path)
+            statusText.text = ok ? "已打开: " + path : "失败: " + doc.errorString
+        }
+    }
 
-        property bool isSaveAs: false
-        function show(saveAs) { isSaveAs = saveAs; pathField.text = doc.filePath; visible = true; pathField.forceActiveFocus() }
-
-        MouseArea { anchors.fill: parent; onClicked: fileOpenOverlay.visible = false }
-
-        Rectangle {
-            anchors.centerIn: parent; width: 520; height: 140
-            color: "#2d2d2d"; radius: 8
-            layer.enabled: true
-            layer.effect: null
-
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 20
-                spacing: 12
-
-                Label {
-                    text: fileOpenOverlay.isSaveAs ? "另存为" : "打开 USD 文件"
-                    color: "#ffffff"; font.pixelSize: 14; font.bold: true
-                }
-
-                TextField {
-                    id: pathField
-                    Layout.fillWidth: true
-                    placeholderText: "/path/to/scene.usda"
-                    color: "#cccccc"
-                    background: Rectangle { color: "#1e1e1e"; radius: 4; border.color: "#555555" }
-                    onAccepted: confirmBtn.clicked()
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    Item { Layout.fillWidth: true }
-                    Button {
-                        text: "取消"; flat: true
-                        contentItem: Text { text: parent.text; color: "#aaaaaa"; font.pixelSize: 12 }
-                        background: Rectangle { color: parent.hovered ? "#333333" : "transparent"; radius: 4 }
-                        onClicked: fileOpenOverlay.visible = false
-                    }
-                    Button {
-                        id: confirmBtn
-                        text: fileOpenOverlay.isSaveAs ? "保存" : "打开"
-                        contentItem: Text { text: parent.text; color: "#ffffff"; font.pixelSize: 12 }
-                        background: Rectangle { color: parent.hovered ? "#005fa3" : "#0078d4"; radius: 4 }
-                        onClicked: {
-                            let path = pathField.text.trim()
-                            if (path === "") return
-                            let ok = fileOpenOverlay.isSaveAs
-                                ? doc.saveAs(path)
-                                : doc.open(path)
-                            statusText.text = ok
-                                ? (fileOpenOverlay.isSaveAs ? "已保存: " + path : "已打开: " + path)
-                                : "失败: " + doc.errorString
-                            fileOpenOverlay.visible = false
-                        }
-                    }
-                }
-            }
+    FileDialog {
+        id: saveAsDialog
+        title: "另存为"
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["USD 文件 (*.usd *.usda *.usdc)", "所有文件 (*)"]
+        onAccepted: {
+            let path = selectedFile.toString().replace("file://", "")
+            let ok = doc.saveAs(path)
+            statusText.text = ok ? "已保存: " + path : "失败"
         }
     }
 }
