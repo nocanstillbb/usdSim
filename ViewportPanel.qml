@@ -132,6 +132,71 @@ Rectangle {
         }
     }
 
+    Row {
+        visible: panel.document.isOpen
+        anchors { top: parent.top; left: parent.left; topMargin: 38; leftMargin: 8 }
+        spacing: 1
+
+        Rectangle {
+            width: gridSnapRow.width + 4
+            height: gridSnapRow.height + 4
+            radius: 4
+            color: "#cc1e1e1e"
+
+            Row {
+                id: gridSnapRow
+                anchors.centerIn: parent
+                spacing: 1
+
+                Rectangle {
+                    width: 56; height: 24
+                    radius: 3
+                    color: viewport.showGrid
+                        ? "#0078d4"
+                        : gridArea.containsMouse ? "#40ffffff" : "transparent"
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "网格"
+                        font.pixelSize: 11
+                        color: viewport.showGrid ? "#ffffff" : "#aaaaaa"
+                    }
+
+                    MouseArea {
+                        id: gridArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: viewport.showGrid = !viewport.showGrid
+                    }
+                }
+
+                Rectangle {
+                    width: 56; height: 24
+                    radius: 3
+                    color: viewport.snapEnabled
+                        ? "#0078d4"
+                        : snapArea.containsMouse ? "#40ffffff" : "transparent"
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "吸附"
+                        font.pixelSize: 11
+                        color: viewport.snapEnabled ? "#ffffff" : "#aaaaaa"
+                    }
+
+                    MouseArea {
+                        id: snapArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: viewport.snapEnabled = !viewport.snapEnabled
+                    }
+                }
+            }
+        }
+    }
+
     Text {
         x: viewport.orientLabelX.x - width / 2
         y: viewport.orientLabelX.y - height / 2
@@ -152,5 +217,22 @@ Rectangle {
         text: "Z"; color: "#5599ff"
         font.pixelSize: 11; font.bold: true
         visible: panel.document.isOpen
+    }
+
+    Rectangle {
+        x: 50 - width / 2
+        y: parent.height - 26
+        color: "#cc1e1e1e"
+        radius: 3
+        width: cmLabel.width + 8
+        height: cmLabel.height + 4
+        visible: panel.document.isOpen
+        Text {
+            id: cmLabel
+            anchors.centerIn: parent
+            text: "cm"
+            color: "#888888"
+            font.pixelSize: 16
+        }
     }
 }
