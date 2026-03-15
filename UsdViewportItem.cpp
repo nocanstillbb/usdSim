@@ -699,12 +699,11 @@ void UsdViewportItem::buildGridMeshes()
     m_gridMeshes.clear();
     m_gridMeshes.resize(4); // 0=small, 1=large, 2=axis-X/Y, 3=axis-Z/Y
 
-    const float extent = 100.f; // ±100 units
+    const float extent = 1000.f; // ±1000 units (±10m)
+    const int smallStep = 10;    // small grid every 10cm
+    const int largeStep = 100;   // large grid every 1m
     const int stride = 6;
 
-    // Indices into the ground plane axes depending on up-axis
-    // Z-up: ground plane is XY, so axis0=X, axis1=Y
-    // Y-up: ground plane is XZ, so axis0=X, axis1=Z
     auto addLine = [&](GizmoMeshData &gm, float x0, float y0, float z0,
                        float x1, float y1, float z1) {
         quint32 base = gm.vertices.size() / stride;
@@ -713,21 +712,19 @@ void UsdViewportItem::buildGridMeshes()
         gm.indices << base << base + 1;
     };
 
-    for (int i = -int(extent); i <= int(extent); ++i) {
+    for (int i = -int(extent); i <= int(extent); i += smallStep) {
         if (i == 0) continue; // axis lines handled separately
 
-        bool isMajor = (i % 10 == 0);
+        bool isMajor = (i % largeStep == 0);
         auto &group = isMajor ? m_gridMeshes[1] : m_gridMeshes[0];
 
         float fi = float(i);
         if (m_zUp) {
-            // XY ground plane: lines parallel to X and Y
-            addLine(group, -extent, fi, 0.f, extent, fi, 0.f); // parallel to X
-            addLine(group, fi, -extent, 0.f, fi, extent, 0.f); // parallel to Y
+            addLine(group, -extent, fi, 0.f, extent, fi, 0.f);
+            addLine(group, fi, -extent, 0.f, fi, extent, 0.f);
         } else {
-            // XZ ground plane: lines parallel to X and Z
-            addLine(group, -extent, 0.f, fi, extent, 0.f, fi); // parallel to X
-            addLine(group, fi, 0.f, -extent, fi, 0.f, extent); // parallel to Z
+            addLine(group, -extent, 0.f, fi, extent, 0.f, fi);
+            addLine(group, fi, 0.f, -extent, fi, 0.f, extent);
         }
     }
 
@@ -998,6 +995,8 @@ void UsdViewportItem::setDocument(UsdDocument *doc)
                 this, &UsdViewportItem::onDocumentChanged);
         connect(m_doc, &UsdDocument::stageModified,
                 this, &UsdViewportItem::onDocumentChanged);
+        connect(m_doc, &UsdDocument::filePathChanged,
+                this, [this]{ m_cameraInitialized = false; });
     }
     m_cameraInitialized = false;
     onDocumentChanged();
@@ -1037,6 +1036,12 @@ void UsdViewportItem::buildMeshes()
     // Rebuild grid if up-axis changed
     if (m_showGrid && m_zUp != oldZUp)
         buildGridMeshes();
+
+    // Unit scale: convert stage units to centimeters
+    double metersPerUnit = UsdGeomGetStageMetersPerUnit(stage);
+    m_unitScale = float(metersPerUnit / 0.01);
+    QMatrix4x4 unitScaleMat;
+    unitScaleMat.scale(m_unitScale);
 
     // XformCache for world transforms (time = default)
     UsdGeomXformCache xfCache;
@@ -1119,7 +1124,7 @@ void UsdViewportItem::buildMeshes()
         for (int r = 0; r < 4; r++)
             for (int c = 0; c < 4; c++)
                 mf[c*4+r] = float(xf[r][c]);
-        md.transform = QMatrix4x4(mf);
+        md.transform = unitScaleMat * QMatrix4x4(mf);
 
         // Extract unique edges from triangle indices
         {
@@ -1146,13 +1151,33 @@ void UsdViewportItem::buildMeshes()
         m_meshes << md;
     }
 
-    // Compute scene center on first load
+    // Compute scene bounding sphere and initialize camera on first load
     if (!m_cameraInitialized && !m_meshes.isEmpty()) {
-        QVector3D center(0, 0, 0);
-        for (const auto &md : m_meshes)
-            center += QVector3D(md.transform(0, 3), md.transform(1, 3), md.transform(2, 3));
-        center /= float(m_meshes.size());
+        // Bounding box of all mesh origins
+        QVector3D bmin(FLT_MAX, FLT_MAX, FLT_MAX);
+        QVector3D bmax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+        for (const auto &md : m_meshes) {
+            // Transform each vertex's bounding contribution
+            const float *v = md.vertices.constData();
+            int vertCount = md.vertices.size() / 6;
+            for (int vi = 0; vi < vertCount; ++vi) {
+                QVector3D local(v[vi*6], v[vi*6+1], v[vi*6+2]);
+                QVector3D world = md.transform.map(local);
+                bmin.setX(qMin(bmin.x(), world.x()));
+                bmin.setY(qMin(bmin.y(), world.y()));
+                bmin.setZ(qMin(bmin.z(), world.z()));
+                bmax.setX(qMax(bmax.x(), world.x()));
+                bmax.setY(qMax(bmax.y(), world.y()));
+                bmax.setZ(qMax(bmax.z(), world.z()));
+            }
+        }
+        QVector3D center = (bmin + bmax) * 0.5f;
+        m_sceneRadius = (bmax - bmin).length() * 0.5f;
+        if (m_sceneRadius < 0.1f) m_sceneRadius = 0.1f;
+
         m_target = center;
+        // Fit camera: distance so scene fills ~60% of view (fov=45°)
+        m_dist = m_sceneRadius / tanf(qDegreesToRadians(22.5f)) * 1.2f;
         m_cameraInitialized = true;
     }
 
@@ -1196,7 +1221,9 @@ void UsdViewportItem::updateCamera()
     const float aspect = (width() > 0 && height() > 0)
                          ? float(width()) / float(height()) : 1.f;
     m_proj.setToIdentity();
-    m_proj.perspective(45.f, aspect, 0.1f, 500.f);
+    float nearP = qMax(0.01f, m_dist * 0.001f);
+    float farP  = qMax(1000.f, m_dist * 20.f);
+    m_proj.perspective(45.f, aspect, nearP, farP);
 
     updateOrientLabels();
 }
@@ -1601,10 +1628,11 @@ void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
                      it != m_gizmoDragStartLocalTranslates.constEnd(); ++it) {
                     int idx = it.key();
                     if (idx < 0 || idx >= m_meshes.size()) continue;
-                    QVector3D localDelta = delta;
+                    QVector3D stageDelta = delta / m_unitScale;
+                    QVector3D localDelta = stageDelta;
                     if (m_gizmoDragParentTransforms.contains(idx)) {
                         QMatrix4x4 parentInv = m_gizmoDragParentTransforms[idx].inverted();
-                        localDelta = parentInv.mapVector(delta);
+                        localDelta = parentInv.mapVector(stageDelta);
                     }
                     QVector3D newLocal = it.value() + localDelta;
                     QString val = QString("(%1, %2, %3)")
@@ -1662,7 +1690,8 @@ void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
                             for (int r = 0; r < 4; r++)
                                 for (int c = 0; c < 4; c++)
                                     mf[c * 4 + r] = float(xf[r][c]);
-                            m_meshes[idx].transform = QMatrix4x4(mf);
+                            QMatrix4x4 us; us.scale(m_unitScale);
+                            m_meshes[idx].transform = us * QMatrix4x4(mf);
                         }
                     }
                 }
@@ -1777,7 +1806,8 @@ void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
                             for (int r = 0; r < 4; r++)
                                 for (int c = 0; c < 4; c++)
                                     mf[c * 4 + r] = float(xf[r][c]);
-                            m_meshes[idx].transform = QMatrix4x4(mf);
+                            QMatrix4x4 us; us.scale(m_unitScale);
+                            m_meshes[idx].transform = us * QMatrix4x4(mf);
                         }
                     }
                 }
@@ -1888,8 +1918,12 @@ void UsdViewportItem::mouseReleaseEvent(QMouseEvent *e)
 }
 void UsdViewportItem::wheelEvent(QWheelEvent *e)
 {
-    m_dist -= e->angleDelta().y() * 0.004f;
-    if (m_dist < 0.004f) m_dist = 0.004f;
+    // Proportional zoom: faster when far, slower when close
+    float factor = 1.f - e->angleDelta().y() / 600.f;
+    m_dist *= factor;
+    float minDist = m_sceneRadius * 0.01f;
+    float maxDist = m_sceneRadius * 50.f;
+    m_dist = qBound(minDist, m_dist, maxDist);
     m_meshDirty = true;
     updateCamera(); update(); e->accept();
 
