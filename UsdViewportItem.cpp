@@ -105,6 +105,13 @@ private:
     bool m_orientRebuild = false;
     QMatrix4x4 m_orientView, m_orientProj;
     QSizeF m_logicalSize;
+
+    // Grid
+    QRhiGraphicsPipeline *m_gridPipeline = nullptr;
+    QVector<RhiGizmoMesh> m_rhiGrid;
+    QVector<GizmoMeshData> m_gridPending;
+    bool m_gridRebuild = false;
+    bool m_showGrid = false;
 };
 
 // ================================================================
@@ -684,6 +691,94 @@ void UsdViewportItem::buildOrientAxesMeshes(QVector<GizmoMeshData> &out)
     out[2].highlightColor = out[2].color;
 }
 
+// ================================================================
+//  Grid mesh generation (4 groups: small lines, large lines, axis1, axis2)
+// ================================================================
+void UsdViewportItem::buildGridMeshes()
+{
+    m_gridMeshes.clear();
+    m_gridMeshes.resize(4); // 0=small, 1=large, 2=axis-X/Y, 3=axis-Z/Y
+
+    const float extent = 100.f; // ±100 units
+    const int stride = 6;
+
+    // Indices into the ground plane axes depending on up-axis
+    // Z-up: ground plane is XY, so axis0=X, axis1=Y
+    // Y-up: ground plane is XZ, so axis0=X, axis1=Z
+    auto addLine = [&](GizmoMeshData &gm, float x0, float y0, float z0,
+                       float x1, float y1, float z1) {
+        quint32 base = gm.vertices.size() / stride;
+        gm.vertices << x0 << y0 << z0 << 0.f << 0.f << 0.f;
+        gm.vertices << x1 << y1 << z1 << 0.f << 0.f << 0.f;
+        gm.indices << base << base + 1;
+    };
+
+    for (int i = -int(extent); i <= int(extent); ++i) {
+        if (i == 0) continue; // axis lines handled separately
+
+        bool isMajor = (i % 10 == 0);
+        auto &group = isMajor ? m_gridMeshes[1] : m_gridMeshes[0];
+
+        float fi = float(i);
+        if (m_zUp) {
+            // XY ground plane: lines parallel to X and Y
+            addLine(group, -extent, fi, 0.f, extent, fi, 0.f); // parallel to X
+            addLine(group, fi, -extent, 0.f, fi, extent, 0.f); // parallel to Y
+        } else {
+            // XZ ground plane: lines parallel to X and Z
+            addLine(group, -extent, 0.f, fi, extent, 0.f, fi); // parallel to X
+            addLine(group, fi, 0.f, -extent, fi, 0.f, extent); // parallel to Z
+        }
+    }
+
+    // Small grid color
+    m_gridMeshes[0].color = QVector3D(0.18f, 0.18f, 0.18f);
+    m_gridMeshes[0].highlightColor = m_gridMeshes[0].color;
+    // Large grid color
+    m_gridMeshes[1].color = QVector3D(0.30f, 0.30f, 0.30f);
+    m_gridMeshes[1].highlightColor = m_gridMeshes[1].color;
+
+    // Axis lines through origin
+    if (m_zUp) {
+        // X axis (red)
+        addLine(m_gridMeshes[2], -extent, 0.f, 0.f, extent, 0.f, 0.f);
+        m_gridMeshes[2].color = QVector3D(1.0f, 0.2f, 0.2f);
+        m_gridMeshes[2].highlightColor = m_gridMeshes[2].color;
+        // Y axis (green)
+        addLine(m_gridMeshes[3], 0.f, -extent, 0.f, 0.f, extent, 0.f);
+        m_gridMeshes[3].color = QVector3D(0.2f, 1.0f, 0.2f);
+        m_gridMeshes[3].highlightColor = m_gridMeshes[3].color;
+    } else {
+        // X axis (red)
+        addLine(m_gridMeshes[2], -extent, 0.f, 0.f, extent, 0.f, 0.f);
+        m_gridMeshes[2].color = QVector3D(1.0f, 0.2f, 0.2f);
+        m_gridMeshes[2].highlightColor = m_gridMeshes[2].color;
+        // Z axis (blue)
+        addLine(m_gridMeshes[3], 0.f, 0.f, -extent, 0.f, 0.f, extent);
+        m_gridMeshes[3].color = QVector3D(0.3f, 0.5f, 1.0f);
+        m_gridMeshes[3].highlightColor = m_gridMeshes[3].color;
+    }
+
+    m_gridDirty = true;
+}
+
+void UsdViewportItem::setShowGrid(bool on)
+{
+    if (m_showGrid == on) return;
+    m_showGrid = on;
+    if (on) buildGridMeshes();
+    m_meshDirty = true;
+    update();
+    emit showGridChanged();
+}
+
+void UsdViewportItem::setSnapEnabled(bool on)
+{
+    if (m_snapEnabled == on) return;
+    m_snapEnabled = on;
+    emit snapEnabledChanged();
+}
+
 // Rotate vertices generated with Y-up to match the USD prim's axis attribute.
 // Generators produce geometry with height along Y; this swizzles to X or Z when needed.
 static void rotateVertsForAxis(QVector<float> &v, const TfToken &axis)
@@ -884,6 +979,7 @@ UsdViewportItem::UsdViewportItem(QQuickItem *parent)
     buildRotateGizmoMeshes(m_rotateGizmoMeshes);
     buildScaleGizmoMeshes(m_scaleGizmoMeshes);
     buildOrientAxesMeshes(m_orientAxesMeshes);
+    buildGridMeshes();
     updateCamera();
 }
 
@@ -935,7 +1031,12 @@ void UsdViewportItem::buildMeshes()
     const UsdStageRefPtr &stage = *stageRef;
 
     // Detect stage up-axis
+    bool oldZUp = m_zUp;
     m_zUp = (UsdGeomGetStageUpAxis(stage) == UsdGeomTokens->z);
+
+    // Rebuild grid if up-axis changed
+    if (m_showGrid && m_zUp != oldZUp)
+        buildGridMeshes();
 
     // XformCache for world transforms (time = default)
     UsdGeomXformCache xfCache;
@@ -1471,6 +1572,16 @@ void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
                 delta = hitCurr - hitStart;
             }
 
+            // Snap to grid
+            if (m_snapEnabled) {
+                QVector3D snappedWorldPos = m_gizmoDragStartPos + delta;
+                float grid = 1.0f;
+                snappedWorldPos.setX(qRound(snappedWorldPos.x() / grid) * grid);
+                snappedWorldPos.setY(qRound(snappedWorldPos.y() / grid) * grid);
+                snappedWorldPos.setZ(qRound(snappedWorldPos.z() / grid) * grid);
+                delta = snappedWorldPos - m_gizmoDragStartPos;
+            }
+
             // Apply delta to all selected meshes (visual)
             for (auto it = m_gizmoDragStartTranslations.constBegin();
                  it != m_gizmoDragStartTranslations.constEnd(); ++it) {
@@ -1962,10 +2073,15 @@ UsdViewportRenderer::~UsdViewportRenderer()
         delete g.vbuf; delete g.ibuf;
         delete g.ubuf; delete g.srb;
     }
+    for (auto &g : m_rhiGrid) {
+        delete g.vbuf; delete g.ibuf;
+        delete g.ubuf; delete g.srb;
+    }
     delete m_pipeline;
     delete m_wirePipeline;
     delete m_stencilPipeline;
     delete m_gizmoPipeline;
+    delete m_gridPipeline;
 }
 
 void UsdViewportRenderer::destroyMeshes()
@@ -2144,6 +2260,14 @@ void UsdViewportRenderer::synchronize(QQuickRhiItem *item)
         m_orientPending = vp->orientAxesMeshes();
         m_orientRebuild = true;
     }
+
+    // Grid state
+    m_showGrid = vp->showGrid() && vp->document() && vp->document()->isOpen();
+    if (vp->gridDirty()) {
+        m_gridPending = vp->gridMeshes();
+        vp->clearGridDirty();
+        m_gridRebuild = true;
+    }
 }
 
 void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
@@ -2188,13 +2312,28 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         m_orientRebuild = false;
     }
 
-    if (m_meshes.isEmpty()) {
+    // Create grid RHI resources
+    if (m_gridRebuild && !m_gridPending.isEmpty()) {
+        for (auto &g : m_rhiGrid) {
+            delete g.vbuf; delete g.ibuf;
+            delete g.ubuf; delete g.srb;
+        }
+        m_rhiGrid.clear();
+        delete m_gridPipeline; m_gridPipeline = nullptr;
+        m_rhiGrid.resize(m_gridPending.size());
+        for (int i = 0; i < m_gridPending.size(); i++)
+            uploadGizmoMesh(m_rhiGrid[i], m_gridPending[i], upd);
+        m_gridPending.clear();
+        m_gridRebuild = false;
+    }
+
+    if (m_meshes.isEmpty() && !(m_showGrid && !m_rhiGrid.isEmpty())) {
         cb->beginPass(renderTarget(), QColor(30, 30, 30), {1.f, 0}, upd);
         cb->endPass();
         return;
     }
 
-    if (!m_pipeline) {
+    if (!m_pipeline && !m_meshes.isEmpty()) {
         QRhiVertexInputLayout il;
         il.setBindings({ QRhiVertexInputBinding(6 * sizeof(float)) });
         il.setAttributes({
@@ -2310,6 +2449,34 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         m_gizmoPipeline->create();
     }
 
+    // Grid pipeline (Lines topology, depth test ON)
+    if (!m_gridPipeline && !m_rhiGrid.isEmpty()) {
+        QRhiVertexInputLayout il;
+        il.setBindings({ QRhiVertexInputBinding(6 * sizeof(float)) });
+        il.setAttributes({
+            QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float3, 0),
+            QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float3, 3 * sizeof(float))
+        });
+
+        m_gridPipeline = rhi->newGraphicsPipeline();
+        m_gridPipeline->setTopology(QRhiGraphicsPipeline::Lines);
+        QRhiGraphicsPipeline::TargetBlend gridBlend;
+        gridBlend.enable = false;
+        m_gridPipeline->setTargetBlends({gridBlend});
+        m_gridPipeline->setDepthTest(true);
+        m_gridPipeline->setDepthWrite(true);
+        m_gridPipeline->setStencilTest(false);
+        m_gridPipeline->setCullMode(QRhiGraphicsPipeline::None);
+        m_gridPipeline->setShaderStages({
+            { QRhiShaderStage::Vertex,   m_vs },
+            { QRhiShaderStage::Fragment, m_fs }
+        });
+        m_gridPipeline->setVertexInputLayout(il);
+        m_gridPipeline->setShaderResourceBindings(m_rhiGrid[0].srb);
+        m_gridPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_gridPipeline->create();
+    }
+
     const QSize sz = renderTarget()->pixelSize();
     const QVector3D lightDir = QVector3D(0.6f, 1.f, 0.8f).normalized();
 
@@ -2408,7 +2575,38 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         }
     }
 
+    // Grid UBO updates
+    if (m_showGrid && !m_rhiGrid.isEmpty()) {
+        QMatrix4x4 gridMVP = rhi->clipSpaceCorrMatrix() * m_proj * m_view;
+        QMatrix4x4 id;
+        for (int i = 0; i < m_rhiGrid.size(); ++i) {
+            auto &g = m_rhiGrid[i];
+            UBuf ub{};
+            memcpy(ub.mvp,   gridMVP.constData(), 64);
+            memcpy(ub.model, id.constData(),       64);
+            ub.color[0] = g.color.x(); ub.color[1] = g.color.y();
+            ub.color[2] = g.color.z(); ub.color[3] = 0.f; // flat color mode
+            memset(ub.lightDir, 0, 16);
+            upd->updateDynamicBuffer(g.ubuf, 0, sizeof(UBuf), &ub);
+        }
+    }
+
     cb->beginPass(renderTarget(), QColor(30, 30, 30), {1.f, 0}, upd);
+
+    // Grid rendering (before meshes, with depth test)
+    if (m_showGrid && m_gridPipeline && !m_rhiGrid.isEmpty()) {
+        cb->setGraphicsPipeline(m_gridPipeline);
+        cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
+        for (auto &g : m_rhiGrid) {
+            if (g.indexCount == 0) continue;
+            cb->setShaderResources(g.srb);
+            QRhiCommandBuffer::VertexInput gvi(g.vbuf, 0);
+            cb->setVertexInput(0, 1, &gvi, g.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
+            cb->drawIndexed(g.indexCount);
+        }
+    }
+
+    if (m_pipeline) {
     cb->setGraphicsPipeline(m_pipeline);
     cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
 
@@ -2450,6 +2648,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         cb->setVertexInput(0, 1, &vi3, sel.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
         cb->drawIndexed(sel.indexCount);
     }
+    } // if (m_pipeline)
 
     // Gizmo rendering (always on top, no depth test)
     if (m_gizmoVisible && m_gizmoPipeline && !m_rhiGizmo.isEmpty()) {

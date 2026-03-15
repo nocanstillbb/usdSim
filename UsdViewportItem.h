@@ -59,6 +59,8 @@ class UsdViewportItem : public QQuickRhiItem
     Q_PROPERTY(QPointF orientLabelX READ orientLabelX NOTIFY orientLabelsChanged)
     Q_PROPERTY(QPointF orientLabelY READ orientLabelY NOTIFY orientLabelsChanged)
     Q_PROPERTY(QPointF orientLabelZ READ orientLabelZ NOTIFY orientLabelsChanged)
+    Q_PROPERTY(bool showGrid READ showGrid WRITE setShowGrid NOTIFY showGridChanged)
+    Q_PROPERTY(bool snapEnabled READ snapEnabled WRITE setSnapEnabled NOTIFY snapEnabledChanged)
     QML_ELEMENT
 
 public:
@@ -88,6 +90,15 @@ public:
     QPointF orientLabelZ() const { return m_orientLabels[2]; }
     const QVector<GizmoMeshData> &orientAxesMeshes() const { return m_orientAxesMeshes; }
 
+    // Grid & Snap
+    bool showGrid() const { return m_showGrid; }
+    void setShowGrid(bool on);
+    bool snapEnabled() const { return m_snapEnabled; }
+    void setSnapEnabled(bool on);
+    const QVector<GizmoMeshData> &gridMeshes() const { return m_gridMeshes; }
+    bool gridDirty() const { return m_gridDirty; }
+    void clearGridDirty() { m_gridDirty = false; }
+
     const QVector<MeshData> &meshes() const { return m_meshes; }
     bool      meshDirty() const  { return m_meshDirty; }
     void      clearMeshDirty()   { m_meshDirty = false; }
@@ -103,6 +114,8 @@ signals:
     void gizmoDragUpdated();
     void gizmoDragFinished(const QString &primPath);
     void orientLabelsChanged();
+    void showGridChanged();
+    void snapEnabledChanged();
 
 protected:
     void mousePressEvent(QMouseEvent *e) override;
@@ -123,6 +136,7 @@ private:
     static void buildRotateGizmoMeshes(QVector<GizmoMeshData> &out);
     static void buildScaleGizmoMeshes(QVector<GizmoMeshData> &out);
     static void buildOrientAxesMeshes(QVector<GizmoMeshData> &out);
+    void buildGridMeshes();
     int  pickGizmo(const QPointF &pos) const;
     void updateGizmoPosition();
     void updateOrientLabels();
@@ -171,4 +185,10 @@ private:
     // Orientation indicator
     QVector<GizmoMeshData> m_orientAxesMeshes;
     QPointF m_orientLabels[3];
+
+    // Grid & Snap
+    bool m_showGrid = true;
+    bool m_snapEnabled = false;
+    bool m_gridDirty = false;
+    QVector<GizmoMeshData> m_gridMeshes;
 };
