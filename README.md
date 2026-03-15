@@ -1,5 +1,6 @@
 # USD 浏览器 (USD Browser)
-
+![screenshot](scennshot.png)
+  
 基于 Qt Quick 和 OpenUSD 的轻量级 3D 场景浏览与编辑器，内置 MCP Inspector 支持运行时 UI 自动化。
 
 ![Qt](https://img.shields.io/badge/Qt-6-green) ![USD](https://img.shields.io/badge/OpenUSD-24.x-blue) ![C++](https://img.shields.io/badge/C%2B%2B-17-orange)
