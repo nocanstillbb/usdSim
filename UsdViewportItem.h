@@ -131,6 +131,7 @@ private:
     QVector<MeshData>  m_meshes;
     bool               m_meshDirty = false;
     QSet<int>          m_selectedMeshes;
+    int                m_anchorMeshIdx = -1;  // last-selected mesh for gizmo placement
 
     // Gizmo state
     int m_gizmoMode = GizmoModeNone;

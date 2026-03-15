@@ -917,6 +917,7 @@ void UsdViewportItem::onDocumentChanged()
     if (!m_doc || !m_doc->isOpen()) {
         setGizmoMode(GizmoModeNone);
         m_selectedMeshes.clear();
+        m_anchorMeshIdx = -1;
         emit selectedPrimPathsChanged();
     }
     // Recompute gizmo position from updated mesh transforms
@@ -1168,10 +1169,14 @@ const QVector<GizmoMeshData> &UsdViewportItem::activeGizmoMeshes() const
 void UsdViewportItem::updateGizmoPosition()
 {
     if (m_gizmoMode == GizmoModeNone || m_selectedMeshes.isEmpty()) return;
-    int anchorIdx = -1;
-    for (int idx : m_selectedMeshes)
-        if (idx >= 0 && idx < m_meshes.size())
-            anchorIdx = idx;
+    int anchorIdx = m_anchorMeshIdx;
+    // Fallback if anchor is invalid or not in current selection
+    if (anchorIdx < 0 || anchorIdx >= m_meshes.size() || !m_selectedMeshes.contains(anchorIdx)) {
+        anchorIdx = -1;
+        for (int idx : m_selectedMeshes)
+            if (idx >= 0 && idx < m_meshes.size())
+                anchorIdx = idx;
+    }
     if (anchorIdx >= 0) {
         const QMatrix4x4 &xf = m_meshes[anchorIdx].transform;
         m_gizmoWorldPos = QVector3D(xf(0, 3), xf(1, 3), xf(2, 3));
@@ -1765,15 +1770,18 @@ QStringList UsdViewportItem::selectedPrimPaths() const
 void UsdViewportItem::selectPrimPath(const QString &path)
 {
     QSet<int> newSel;
+    int lastIdx = -1;
     if (!path.isEmpty()) {
         for (int i = 0; i < m_meshes.size(); ++i) {
             if (m_meshes[i].primPath.startsWith(path)) {
                 newSel.insert(i);
+                lastIdx = i;
             }
         }
     }
     if (newSel != m_selectedMeshes) {
         m_selectedMeshes = newSel;
+        m_anchorMeshIdx = lastIdx;
         m_meshDirty = true;
         updateGizmoPosition();
         update();
@@ -1784,15 +1792,19 @@ void UsdViewportItem::selectPrimPath(const QString &path)
 void UsdViewportItem::selectPrimPaths(const QStringList &paths)
 {
     QSet<int> newSel;
+    int lastMatchedIdx = -1;
     for (const QString &path : paths) {
         if (path.isEmpty()) continue;
         for (int i = 0; i < m_meshes.size(); ++i) {
-            if (m_meshes[i].primPath.startsWith(path))
+            if (m_meshes[i].primPath.startsWith(path)) {
                 newSel.insert(i);
+                lastMatchedIdx = i;
+            }
         }
     }
     if (newSel != m_selectedMeshes) {
         m_selectedMeshes = newSel;
+        m_anchorMeshIdx = lastMatchedIdx;
         m_meshDirty = true;
         updateGizmoPosition();
         update();
@@ -1820,10 +1832,17 @@ void UsdViewportItem::togglePrimPath(const QString &path)
             break;
         }
     }
-    if (allSelected)
+    if (allSelected) {
         m_selectedMeshes -= matched;
-    else
+        // If anchor was removed, reset it
+        if (matched.contains(m_anchorMeshIdx))
+            m_anchorMeshIdx = -1;
+    } else {
         m_selectedMeshes += matched;
+        // Set anchor to the last matched mesh (the one just added)
+        for (int idx : matched)
+            m_anchorMeshIdx = idx;
+    }
 
     m_meshDirty = true;
     updateGizmoPosition();
