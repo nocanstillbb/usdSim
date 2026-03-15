@@ -169,6 +169,7 @@ private:
     float   m_yaw   = 30.f;
     float   m_pitch = 25.f;
     float   m_dist  = 20.f;
+    float   m_sceneRadius = 10.f;
     QPointF m_lastMouse;
     QPointF m_pressPos;
     bool    m_dragging = false;
@@ -177,6 +178,7 @@ private:
     QVector3D  m_target{0, 0, 0};
     QVector3D  m_cameraEye;
     bool       m_zUp = true;
+    float      m_unitScale = 1.f;
     bool       m_cameraInitialized = false;
 
     QMatrix4x4 m_view;
