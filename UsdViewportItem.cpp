@@ -1411,11 +1411,18 @@ void UsdViewportItem::mousePressEvent(QMouseEvent *e)
                         angle = atan2f(fromCenter.y(), fromCenter.x());
                     m_gizmoDragStartAngle = angle;
                 } else {
-                    // Scale: compute distance from gizmo center to mouse hit
-                    QVector3D planeN = (m_cameraEye - m_gizmoWorldPos).normalized();
-                    QVector3D hitPt = rayPlaneHit(rayO, rayD, m_gizmoWorldPos, planeN);
-                    m_gizmoDragStartDistance = (hitPt - m_gizmoWorldPos).length();
-                    if (m_gizmoDragStartDistance < 1e-5f) m_gizmoDragStartDistance = 1.f;
+                    // Scale
+                    if (hit <= AxisZ) {
+                        // Axis drag: store projection of mouse click onto the axis
+                        static const QVector3D axes[] = { {1,0,0}, {0,1,0}, {0,0,1} };
+                        m_gizmoDragStartDistance = closestParamOnLine(m_gizmoWorldPos, axes[hit], rayO, rayD);
+                    } else {
+                        // Origin/plane drag: compute distance from gizmo center to mouse hit
+                        QVector3D planeN = (m_cameraEye - m_gizmoWorldPos).normalized();
+                        QVector3D hitPt = rayPlaneHit(rayO, rayD, m_gizmoWorldPos, planeN);
+                        m_gizmoDragStartDistance = (hitPt - m_gizmoWorldPos).length();
+                        if (m_gizmoDragStartDistance < 1e-5f) m_gizmoDragStartDistance = 1.f;
+                    }
                 }
             }
 
@@ -1553,12 +1560,40 @@ void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
 
         } else if (m_gizmoMode == GizmoModeScale) {
             // --- Scale drag ---
-            // Use viewport 2D pixel delta: right/up = scale up, left/down = scale down.
-            QPointF delta = e->position() - m_gizmoDragStartMouse;
-            // Combine horizontal (right=+) and vertical (up=-, Qt Y is down) contributions
-            float pixelDelta = float(delta.x() - delta.y()) * 0.5f;
-            // Sensitivity: 200 pixels = 1x scale change (so 200px right → scale 2.0)
-            float scaleFactor = 1.f + pixelDelta / 200.f;
+            float scaleFactor;
+            if (m_gizmoDragPart <= AxisZ) {
+                // Axis drag: project mouse onto the gizmo axis so cube tip tracks mouse
+                static const QVector3D axes[] = { {1,0,0}, {0,1,0}, {0,0,1} };
+                QVector3D axis = axes[m_gizmoDragPart];
+                float tCurr = closestParamOnLine(origin, axis, curOrig, curDir);
+                // Cube tip is at 0.84 * gizmoScale along the axis in world space
+                float gizmoScale = (origin - m_cameraEye).length() * 0.08f;
+                float cubeTipDist = 0.84f * gizmoScale;
+                if (cubeTipDist < 1e-6f) cubeTipDist = 1.f;
+                scaleFactor = 1.f + (tCurr - m_gizmoDragStartDistance) / cubeTipDist;
+            } else if (m_gizmoDragPart == Origin) {
+                // Origin: project onto camera-facing plane, same sensitivity as axis drag
+                QVector3D planeN = (m_cameraEye - origin).normalized();
+                QVector3D hitCurr  = rayPlaneHit(curOrig, curDir, origin, planeN);
+                QVector3D hitStart = rayPlaneHit(startOrig, startDir, origin, planeN);
+                // Signed displacement along the initial drag direction
+                QVector3D startVec = (hitStart - origin);
+                float startLen = startVec.length();
+                float displacement;
+                if (startLen > 1e-6f)
+                    displacement = QVector3D::dotProduct(hitCurr - hitStart, startVec / startLen);
+                else
+                    displacement = (hitCurr - hitStart).length();
+                float gizmoScale = (origin - m_cameraEye).length() * 0.08f;
+                float cubeTipDist = 0.84f * gizmoScale;
+                if (cubeTipDist < 1e-6f) cubeTipDist = 1.f;
+                scaleFactor = 1.f + displacement / cubeTipDist;
+            } else {
+                // Plane: use pixel delta
+                QPointF delta = e->position() - m_gizmoDragStartMouse;
+                float pixelDelta = float(delta.x() - delta.y()) * 0.5f;
+                scaleFactor = 1.f + pixelDelta / 200.f;
+            }
 
             // Clamp scale factor
             scaleFactor = qBound(-100.f, scaleFactor, 100.f);
