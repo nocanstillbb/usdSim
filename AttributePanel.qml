@@ -69,6 +69,7 @@ Rectangle {
 
         Rectangle {
             Layout.fillWidth: true; height: 28; color: "#252525"
+            TapHandler { onTapped: panel.forceActiveFocus() }
             RowLayout {
                 anchors { fill: parent; leftMargin: 8; rightMargin: 8 }
                 Label {
@@ -86,6 +87,7 @@ Rectangle {
         Rectangle {
             id: colHeader
             Layout.fillWidth: true; height: 22; color: "#2d2d2d"
+            TapHandler { onTapped: panel.forceActiveFocus() }
 
             // Name column header
             Item {
@@ -161,6 +163,21 @@ Rectangle {
             }
         }
 
+        // Search bar
+        Rectangle {
+            Layout.fillWidth: true; height: 32; color: "#252525"
+            TextField {
+                id: searchField
+                anchors.fill: parent
+                anchors.leftMargin: 6; anchors.rightMargin: 6
+                anchors.topMargin: 3; anchors.bottomMargin: 3
+                placeholderText: "搜索属性..."
+                placeholderTextColor: "#555555"
+                font.pixelSize: 11; color: "#cccccc"
+                background: Rectangle { color: "#1e1e1e"; radius: 3; border.color: searchField.activeFocus ? "#0078d4" : "#333333" }
+            }
+        }
+
         ListView {
             id: attrList
             Layout.fillWidth: true; Layout.fillHeight: true
@@ -176,7 +193,14 @@ Rectangle {
 
             delegate: Rectangle {
                 id: attrDelegate
-                width: attrList.width; height: 32
+                readonly property bool _matches: {
+                    let q = searchField.text.toLowerCase()
+                    return q === "" || model.name.toLowerCase().indexOf(q) >= 0
+                        || model.typeName.toLowerCase().indexOf(q) >= 0
+                        || model.value.toLowerCase().indexOf(q) >= 0
+                }
+                width: attrList.width; height: _matches ? 32 : 0
+                visible: _matches
                 color: {
                     if (attrList.selectedIndex === index)
                         return "#007acc"
@@ -187,7 +211,7 @@ Rectangle {
 
                 HoverHandler { id: hoverHandler }
                 TapHandler {
-                    onTapped: attrList.selectedIndex = index
+                    onTapped: { attrList.selectedIndex = index; attrList.forceActiveFocus() }
                 }
 
                 RowLayout {

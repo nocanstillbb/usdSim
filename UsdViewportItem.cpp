@@ -1427,6 +1427,7 @@ static QVector3D rayPlaneHit(QVector3D rayO, QVector3D rayD, QVector3D planeO, Q
 
 void UsdViewportItem::mousePressEvent(QMouseEvent *e)
 {
+    forceActiveFocus();
     m_lastMouse = e->position();
     m_pressPos  = e->position();
 
