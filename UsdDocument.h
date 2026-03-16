@@ -70,6 +70,28 @@ public:
     // 设置 prim 的 visibility — pushes undo command
     Q_INVOKABLE bool setPrimVisibility(const QString &primPath, bool visible);
 
+    // Create a new attribute on prims
+    Q_INVOKABLE bool addAttribute(const QStringList &primPaths,
+                                   const QString &attrName,
+                                   const QString &typeName,
+                                   bool custom,
+                                   const QString &variability);
+
+    // Get applied API schemas on a prim
+    Q_INVOKABLE QStringList getAppliedSchemas(const QString &primPath);
+
+    // Get all available applied API schema type names
+    Q_INVOKABLE QStringList getAvailableApiSchemas();
+
+    // Apply an API schema to prims
+    Q_INVOKABLE bool applyApiSchema(const QStringList &primPaths, const QString &schemaIdentifier);
+
+    // Remove an API schema from prims
+    Q_INVOKABLE bool removeApiSchema(const QStringList &primPaths, const QString &schemaIdentifier);
+
+    // Remove an attribute from prims
+    Q_INVOKABLE bool removeAttribute(const QStringList &primPaths, const QString &attrName);
+
     // 属性模型操作（全量加载 / 增量刷新 / 清空）
     Q_INVOKABLE void loadAttributes(const QStringList &primPaths);
     Q_INVOKABLE void refreshAttributes(const QStringList &primPaths);
@@ -93,6 +115,11 @@ public:
                          const QString &typeName);
     bool removePrimInternal(const QString &primPath);
     bool setPrimVisibilityInternal(const QString &primPath, bool visible);
+    bool addAttributeInternal(const QString &primPath, const QString &attrName,
+                              const QString &typeName, bool custom, const QString &variability);
+    bool removeAttributeInternal(const QString &primPath, const QString &attrName);
+    bool applyApiSchemaInternal(const QString &primPath, const QString &schemaIdentifier);
+    bool removeApiSchemaInternal(const QString &primPath, const QString &schemaIdentifier);
 
     // Low-level: set USD visibility attr only, no signals/tree update
     bool setVisibilityRaw(const QString &primPath, bool visible);

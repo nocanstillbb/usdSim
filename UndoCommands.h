@@ -146,6 +146,92 @@ private:
     QStringList m_newSelection;
 };
 
+// ── AddAttributeCommand ─────────────────────────────────────
+class AddAttributeCommand : public UndoCommand
+{
+public:
+    AddAttributeCommand(UsdDocument *doc,
+                        const QStringList &primPaths,
+                        const QString &attrName,
+                        const QString &typeName,
+                        bool custom,
+                        const QString &variability);
+
+    void undo() override;
+    void redo() override;
+    QString text() const override;
+
+private:
+    UsdDocument *m_doc;
+    QStringList m_primPaths;
+    QString m_attrName;
+    QString m_typeName;
+    bool m_custom;
+    QString m_variability;
+};
+
+// ── RemoveAttributeCommand ──────────────────────────────────
+class RemoveAttributeCommand : public UndoCommand
+{
+public:
+    struct Entry {
+        QString primPath;
+        QString typeName;
+        bool custom;
+        QString variability;
+        QString oldValue;
+    };
+
+    RemoveAttributeCommand(UsdDocument *doc,
+                           const QString &attrName,
+                           const QVector<Entry> &entries);
+
+    void undo() override;
+    void redo() override;
+    QString text() const override;
+
+private:
+    UsdDocument *m_doc;
+    QString m_attrName;
+    QVector<Entry> m_entries;
+};
+
+// ── ApplyApiSchemaCommand ───────────────────────────────────
+class ApplyApiSchemaCommand : public UndoCommand
+{
+public:
+    ApplyApiSchemaCommand(UsdDocument *doc,
+                          const QStringList &primPaths,
+                          const QString &schemaIdentifier);
+
+    void undo() override;
+    void redo() override;
+    QString text() const override;
+
+private:
+    UsdDocument *m_doc;
+    QStringList m_primPaths;
+    QString m_schemaIdentifier;
+};
+
+// ── RemoveApiSchemaCommand ──────────────────────────────────
+class RemoveApiSchemaCommand : public UndoCommand
+{
+public:
+    RemoveApiSchemaCommand(UsdDocument *doc,
+                           const QStringList &primPaths,
+                           const QString &schemaIdentifier);
+
+    void undo() override;
+    void redo() override;
+    QString text() const override;
+
+private:
+    UsdDocument *m_doc;
+    QStringList m_primPaths;
+    QString m_schemaIdentifier;
+};
+
 // ── GizmoTransformCommand ────────────────────────────────────
 // Captures pre-drag and post-drag transform attribute values.
 // Used with pushNoRedo() since the drag already applied changes.
