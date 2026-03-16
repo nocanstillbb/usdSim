@@ -46,6 +46,31 @@ Rectangle {
         }
     }
 
+    // ── Right-click context menu ──
+    PrimContextMenu {
+        id: primCtxMenu
+        onAddAttributeRequested: primAddAttrDialog.openDialog()
+        onEditApiSchemaRequested: primEditSchemaDialog.openDialog()
+    }
+
+    AddAttributeDialog {
+        id: primAddAttrDialog
+        document: panel.document
+        selectedPrimPaths: panel.selectedPrimPaths
+        onAttributeAdded: {
+            // Notify parent to refresh attribute panel
+        }
+    }
+
+    EditSchemaDialog {
+        id: primEditSchemaDialog
+        document: panel.document
+        selectedPrimPaths: panel.selectedPrimPaths
+        onSchemaChanged: {
+            // Notify parent to refresh attribute panel
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -219,6 +244,25 @@ Rectangle {
                     }
                 }
 
+                // Right-click context menu
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.RightButton
+                    onClicked: function(mouse) {
+                        let paths = panel.selectedPrimPaths.slice ? panel.selectedPrimPaths.slice() : []
+                        if (paths.indexOf(model.path) < 0) {
+                            // Not in selection — select this prim only
+                            let index = treeView.index(row, column)
+                            treeView.selectionModel.setCurrentIndex(index, ItemSelectionModel.ClearAndSelect | ItemSelectionModel.Rows)
+                            panel._internalChange = true
+                            panel.selectedPrimPaths = [model.path]
+                            panel.selectionChanged([model.path])
+                            panel._internalChange = false
+                        }
+                        primCtxMenu.popup()
+                    }
+                }
+
                 property Animation indicatorAnimation: NumberAnimation {
                     target: indicator
                     property: "rotation"
@@ -332,87 +376,89 @@ Rectangle {
         }
     }
 
-    Menu {
-        id: primCtxMenu
-        property string primPath: ""
-        MenuItem {
-            text: "添加子 Prim"
-            onTriggered: { addPrimOverlay.parentPath = primCtxMenu.primPath; addPrimOverlay.visible = true }
-        }
-        MenuItem {
-            text: "删除此 Prim"
-            onTriggered: {
-                let ok = panel.document.removePrim(primCtxMenu.primPath)
-                if (ok) {
-                    panel._internalChange = true
-                    panel.selectedPrimPaths = []
-                    panel.selectionChanged([])
-                    panel._internalChange = false
-                }
-                panel.statusMessage(ok ? "已删除" : "删除失败")
-            }
-        }
-    }
 
-    Rectangle {
+    Popup {
         id: addPrimOverlay
-        anchors.fill: parent; color: "#99000000"; visible: false; z: 200
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
         property string parentPath: ""
 
-        MouseArea { anchors.fill: parent; onClicked: addPrimOverlay.visible = false }
+        width: Math.min(360, (parent ? parent.width : 400) - 40)
+        padding: 20
 
-        Rectangle {
-            anchors.centerIn: parent
-            width: Math.min(360, parent.width - 20)
-            height: 200
-            color: "#2d2d2d"; radius: 8
+        Overlay.modal: Rectangle { color: "#99000000" }
+        background: Rectangle { color: AppStyle.bgWidget; radius: 8 }
 
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 20
-                spacing: 10
+        contentItem: ColumnLayout {
+            spacing: 10
 
-                Label { text: "添加 Prim"; color: "#ffffff"; font.pixelSize: 14; font.bold: true }
-                Label { text: "父: " + addPrimOverlay.parentPath; color: "#888888"; font.pixelSize: 11; elide: Text.ElideRight }
+            Label { text: "添加 Prim"; color: AppStyle.textWhite; font.pixelSize: 14; font.bold: true }
+            Label { text: "父: " + addPrimOverlay.parentPath; color: AppStyle.textMuted; font.pixelSize: AppStyle.fontSizeSmall; elide: Text.ElideRight }
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    Label { text: "名称:"; color: "#cccccc"; font.pixelSize: 12; Layout.preferredWidth: 50 }
-                    TextField {
-                        id: newPrimName; Layout.fillWidth: true; placeholderText: "MyPrim"
-                        color: "#cccccc"
-                        background: Rectangle { color: "#1e1e1e"; radius: 4; border.color: "#555555" }
-                    }
+            RowLayout {
+                Layout.fillWidth: true
+                Label { text: "名称:"; color: AppStyle.textPrimary; font.pixelSize: AppStyle.fontSize; Layout.preferredWidth: 50 }
+                TextField {
+                    id: newPrimName; Layout.fillWidth: true; placeholderText: "MyPrim"
+                    implicitHeight: AppStyle.controlHeight
+                    color: AppStyle.textPrimary; font.pixelSize: AppStyle.fontSize
+                    background: Rectangle { color: AppStyle.bgBase; radius: 4; border.color: AppStyle.border }
                 }
-                RowLayout {
-                    Layout.fillWidth: true
-                    Label { text: "类型:"; color: "#cccccc"; font.pixelSize: 12; Layout.preferredWidth: 50 }
-                    ComboBox {
-                        id: newPrimType; Layout.fillWidth: true
-                        model: ["Xform","Sphere","Cube","Cylinder","Cone","Mesh","Camera",""]
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Label { text: "类型:"; color: AppStyle.textPrimary; font.pixelSize: AppStyle.fontSize; Layout.preferredWidth: 50 }
+                ComboBox {
+                    id: newPrimType; Layout.fillWidth: true; font.pixelSize: AppStyle.fontSize
+                    implicitHeight: AppStyle.controlHeight
+                    model: ["Xform","Sphere","Cube","Cylinder","Cone","Mesh","Camera",""]
+                    contentItem: Text {
+                        leftPadding: 6
+                        text: newPrimType.displayText; font.pixelSize: AppStyle.fontSize
+                        color: AppStyle.textBright; verticalAlignment: Text.AlignVCenter
                     }
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    Item { Layout.fillWidth: true }
-                    Button {
-                        text: "取消"; flat: true
-                        contentItem: Text { text: parent.text; color: "#aaaaaa"; font.pixelSize: 12 }
-                        background: Rectangle { color: parent.hovered ? "#333333" : "transparent"; radius: 4 }
-                        onClicked: addPrimOverlay.visible = false
-                    }
-                    Button {
-                        text: "添加"
-                        contentItem: Text { text: parent.text; color: "#ffffff"; font.pixelSize: 12 }
-                        background: Rectangle { color: parent.hovered ? "#005fa3" : "#0078d4"; radius: 4 }
-                        onClicked: {
-                            let name = newPrimName.text.trim()
-                            if (name === "") return
-                            let ok = panel.document.addPrim(addPrimOverlay.parentPath, name, newPrimType.currentText)
-                            panel.statusMessage(ok ? "已添加: " + addPrimOverlay.parentPath + "/" + name : "添加失败")
-                            addPrimOverlay.visible = false
+                    background: Rectangle { color: AppStyle.bgInput; radius: 3; border.color: newPrimType.activeFocus ? AppStyle.borderFocus : AppStyle.border }
+                    indicator: Text { anchors.right: parent.right; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter; text: "\u25BE"; color: AppStyle.textMuted; font.pixelSize: AppStyle.fontSizeTiny }
+                    popup: Popup {
+                        y: newPrimType.height
+                        width: newPrimType.width; implicitHeight: contentItem.implicitHeight + 2; padding: 1
+                        background: Rectangle { color: AppStyle.bgWidget; border.color: AppStyle.border; radius: 3 }
+                        contentItem: ListView {
+                            clip: true; implicitHeight: Math.min(contentHeight, 200)
+                            model: newPrimType.delegateModel
+                            ScrollBar.vertical: ScrollBar {}
                         }
+                    }
+                    delegate: ItemDelegate {
+                        width: newPrimType.width; height: 24
+                        contentItem: Text { text: modelData; color: highlighted ? AppStyle.textWhite : AppStyle.textPrimary; font.pixelSize: AppStyle.fontSizeSmall; verticalAlignment: Text.AlignVCenter }
+                        highlighted: newPrimType.highlightedIndex === index
+                        background: Rectangle { color: highlighted ? AppStyle.accent : "transparent" }
+                    }
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "取消"; flat: true
+                    contentItem: Text { text: parent.text; color: AppStyle.textSecondary; font.pixelSize: AppStyle.fontSize }
+                    background: Rectangle { color: parent.hovered ? AppStyle.bgMid : "transparent"; radius: 4 }
+                    onClicked: addPrimOverlay.close()
+                }
+                Button {
+                    text: "添加"
+                    contentItem: Text { text: parent.text; color: AppStyle.textWhite; font.pixelSize: AppStyle.fontSize }
+                    background: Rectangle { color: parent.hovered ? AppStyle.accentDark : AppStyle.accent; radius: 4 }
+                    onClicked: {
+                        let name = newPrimName.text.trim()
+                        if (name === "") return
+                        let ok = panel.document.addPrim(addPrimOverlay.parentPath, name, newPrimType.currentText)
+                        panel.statusMessage(ok ? "已添加: " + addPrimOverlay.parentPath + "/" + name : "添加失败")
+                        addPrimOverlay.close()
                     }
                 }
             }
