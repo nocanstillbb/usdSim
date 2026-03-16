@@ -16,18 +16,19 @@ void UndoStack::truncateFuture()
 
 void UndoStack::push(std::unique_ptr<UndoCommand> cmd)
 {
+    truncateFuture();
+    cmd->redo();
+
     // Try merging with the top command
     if (m_index > 0 && cmd->id() >= 0) {
         UndoCommand *top = m_commands[m_index - 1].get();
         if (top->id() == cmd->id() && top->mergeWith(cmd.get())) {
-            // Merged — no new entry needed
+            // Merged — no new entry needed; redo already applied above
             emit indexChanged();
             return;
         }
     }
 
-    truncateFuture();
-    cmd->redo();
     m_commands.push_back(std::move(cmd));
     m_index = m_commands.size();
     emit indexChanged();
