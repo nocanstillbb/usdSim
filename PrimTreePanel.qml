@@ -72,7 +72,8 @@ Rectangle {
                 width: panel._eyeColWidth; height: parent.height
                 anchors.right: typeHeaderCol.left
                 Label {
-                    anchors.centerIn: parent
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
                     text: "可视"; color: "#888888"; font.pixelSize: 10
                 }
                 // Left resize handle
@@ -285,7 +286,8 @@ Rectangle {
                     Image {
                         id: eyeImg
                         source: model.isActive ? "icons/eye-solid.svg" : "icons/eye-slash-solid.svg"
-                        anchors.centerIn: parent
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
                         width: 14; height: 14
                         sourceSize: Qt.size(14, 14)
                         fillMode: Image.PreserveAspectFit
