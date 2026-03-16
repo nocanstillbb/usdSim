@@ -236,4 +236,34 @@ Rectangle {
             font.pixelSize: 16
         }
     }
+
+    // ── Right-click context menu ──
+    MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.RightButton
+        onClicked: function(mouse) {
+            if (panel.selectedPrimPaths.length > 0)
+                viewportCtxMenu.popup()
+        }
+    }
+
+    PrimContextMenu {
+        id: viewportCtxMenu
+        onAddAttributeRequested: addAttrDialog.openDialog()
+        onEditApiSchemaRequested: editSchemaDialog.openDialog()
+    }
+
+    AddAttributeDialog {
+        id: addAttrDialog
+        document: panel.document
+        selectedPrimPaths: panel.selectedPrimPaths
+        onAttributeAdded: panel.attributeRefreshNeeded()
+    }
+
+    EditSchemaDialog {
+        id: editSchemaDialog
+        document: panel.document
+        selectedPrimPaths: panel.selectedPrimPaths
+        onSchemaChanged: panel.attributeRefreshNeeded()
+    }
 }

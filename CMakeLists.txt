@@ -38,10 +38,13 @@ qt_add_executable(apptest_qmlcmp
 )
 
 
+set_source_files_properties(AppStyle.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+
 qt_add_qml_module(apptest_qmlcmp
     URI test_qmlcmp
     VERSION 1.0
     QML_FILES main.qml PrimTreePanel.qml ViewportPanel.qml AttributePanel.qml HistoryPanel.qml
+              AppStyle.qml PrimContextMenu.qml AddAttributeDialog.qml EditSchemaDialog.qml
     RESOURCES icons/eye-solid.svg icons/eye-slash-solid.svg
 )
 

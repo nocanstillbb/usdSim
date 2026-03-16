@@ -214,6 +214,18 @@ Rectangle {
                     onTapped: { attrList.selectedIndex = index; attrList.forceActiveFocus() }
                 }
 
+                // Right-click context menu
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.RightButton
+                    onClicked: function(mouse) {
+                        attrList.selectedIndex = index
+                        attrCtxMenu._targetAttrName = model.name
+                        attrCtxMenu._targetIsCustom = model.isCustom
+                        attrCtxMenu.popup()
+                    }
+                }
+
                 RowLayout {
                     anchors.fill: parent
                     anchors.leftMargin: 6
@@ -234,8 +246,9 @@ Rectangle {
                     TextField {
                         id: valField
                         Layout.fillWidth: true
+                        readOnly: model.readOnly
                         text: model.value; font.pixelSize: 11
-                        color: model.value === "mixed" ? "#888888" : "#dcdcaa"
+                        color: model.readOnly ? "#666666" : (model.value === "mixed" ? "#888888" : "#dcdcaa")
                         font.italic: model.value === "mixed"
                         property string _name:     model.name     || ""
                         property string _typeName: model.typeName || ""
@@ -254,6 +267,48 @@ Rectangle {
                             _busy = false
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // ── Attribute context menu ──
+    Menu {
+        id: attrCtxMenu
+        property string _targetAttrName: ""
+        property bool _targetIsCustom: false
+        topPadding: 2; bottomPadding: 2
+
+        delegate: MenuItem {
+            id: attrCtxDelegate
+            implicitWidth: 160
+            implicitHeight: 28
+            contentItem: Text {
+                text: attrCtxDelegate.text
+                font.pixelSize: 12
+                color: attrCtxDelegate.highlighted ? "#ffffff" : "#cccccc"
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 8; rightPadding: 8
+            }
+            background: Rectangle {
+                implicitWidth: 160; implicitHeight: 28
+                color: attrCtxDelegate.highlighted ? "#0078d4" : "transparent"
+            }
+        }
+
+        background: Rectangle {
+            implicitWidth: 160; implicitHeight: 10
+            color: "#2d2d2d"; border.color: "#555555"; radius: 4
+        }
+
+        Action {
+            text: "删除属性"
+            enabled: attrCtxMenu._targetIsCustom
+            onTriggered: {
+                let ok = panel.document.removeAttribute(panel.selectedPrimPaths, attrCtxMenu._targetAttrName)
+                if (ok) {
+                    panel.document.loadAttributes(panel.selectedPrimPaths)
+                    panel.statusMessage("已删除: " + attrCtxMenu._targetAttrName)
                 }
             }
         }
