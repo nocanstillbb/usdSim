@@ -13,6 +13,8 @@ Rectangle {
     signal statusMessage(string msg)
 
     property bool _internalChange: false
+    property real _eyeColWidth: 36
+    property real _typeColWidth: 70
 
     onSelectedPrimPathsChanged: {
         if (_internalChange) return
@@ -53,6 +55,82 @@ Rectangle {
             Label { anchors.centerIn: parent; text: "Prim 列表"; color: "#aaaaaa"; font.bold: true; font.pixelSize: 11 }
         }
 
+        // Column header with resize handles
+        Rectangle {
+            id: colHeader
+            Layout.fillWidth: true; height: 22; color: "#2d2d2d"
+
+            Label {
+                anchors.left: parent.left; anchors.leftMargin: 8
+                anchors.verticalCenter: parent.verticalCenter
+                text: "名称"; color: "#888888"; font.pixelSize: 10
+            }
+
+            // Eye column header
+            Item {
+                id: eyeHeaderCol
+                width: panel._eyeColWidth; height: parent.height
+                anchors.right: typeHeaderCol.left
+                Label {
+                    anchors.centerIn: parent
+                    text: "可视"; color: "#888888"; font.pixelSize: 10
+                }
+                // Left resize handle
+                MouseArea {
+                    id: eyeResizeHandle
+                    width: 6; height: parent.height
+                    anchors.left: parent.left; anchors.leftMargin: -3
+                    cursorShape: Qt.SplitHCursor
+                    property real startX: 0
+                    property real startEyeW: 0
+                    property real startTypeW: 0
+                    onPressed: function(mouse) {
+                        startX = mapToItem(colHeader, mouse.x, 0).x
+                        startEyeW = panel._eyeColWidth
+                    }
+                    onPositionChanged: function(mouse) {
+                        if (!pressed) return
+                        let currX = mapToItem(colHeader, mouse.x, 0).x
+                        let delta = startX - currX
+                        let newW = Math.max(24, startEyeW + delta)
+                        panel._eyeColWidth = newW
+                    }
+                }
+            }
+
+            // Type column header
+            Item {
+                id: typeHeaderCol
+                width: panel._typeColWidth; height: parent.height
+                anchors.right: parent.right
+                Label {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left; anchors.leftMargin: 4
+                    text: "类型"; color: "#888888"; font.pixelSize: 10
+                }
+                // Left resize handle
+                MouseArea {
+                    id: typeResizeHandle
+                    width: 6; height: parent.height
+                    anchors.left: parent.left; anchors.leftMargin: -3
+                    cursorShape: Qt.SplitHCursor
+                    property real startX: 0
+                    property real startTypeW: 0
+                    onPressed: function(mouse) {
+                        startX = mapToItem(colHeader, mouse.x, 0).x
+                        startTypeW = panel._typeColWidth
+                    }
+                    onPositionChanged: function(mouse) {
+                        if (!pressed) return
+                        let currX = mapToItem(colHeader, mouse.x, 0).x
+                        let delta = startX - currX
+                        let newW = Math.max(30, startTypeW + delta)
+                        panel._typeColWidth = newW
+                    }
+                }
+            }
+        }
+
         TreeView {
             id: primTree
             Layout.fillWidth: true; Layout.fillHeight: true
@@ -73,8 +151,8 @@ Rectangle {
                 id: primDelegate
                 readonly property real indentation: 15
                 readonly property real padding: 15
-                readonly property real eyeColumnWidth: 70
-                readonly property real typeColumnWidth: 70
+                readonly property real eyeColumnWidth: panel._eyeColWidth
+                readonly property real typeColumnWidth: panel._typeColWidth
                 required property TreeView treeView
                 required property bool isTreeNode
                 required property bool expanded
