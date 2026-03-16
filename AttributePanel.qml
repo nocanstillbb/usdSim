@@ -12,6 +12,8 @@ Rectangle {
     signal statusMessage(string msg)
 
     property string _primTypeText: ""
+    property real _nameColWidth: 150
+    property real _typeColWidth: 80
 
     onSelectedPrimPathsChanged: _loadAttributes()
 
@@ -80,6 +82,85 @@ Rectangle {
             }
         }
 
+        // Column header with resize handles
+        Rectangle {
+            id: colHeader
+            Layout.fillWidth: true; height: 22; color: "#2d2d2d"
+
+            // Name column header
+            Item {
+                id: nameHeaderCol
+                anchors.left: parent.left; anchors.right: typeHeaderCol.left
+                height: parent.height
+                Label {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left; anchors.leftMargin: 6
+                    text: "属性名"; color: "#888888"; font.pixelSize: 10
+                }
+            }
+
+            // Type column header
+            Item {
+                id: typeHeaderCol
+                width: panel._typeColWidth; height: parent.height
+                anchors.right: valueHeaderCol.left
+                Label {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left; anchors.leftMargin: 4
+                    text: "类型"; color: "#888888"; font.pixelSize: 10
+                }
+                // Left resize handle (between name and type)
+                MouseArea {
+                    width: 6; height: parent.height
+                    anchors.left: parent.left; anchors.leftMargin: -3
+                    cursorShape: Qt.SplitHCursor
+                    property real startX: 0
+                    property real startW: 0
+                    onPressed: function(mouse) {
+                        startX = mapToItem(colHeader, mouse.x, 0).x
+                        startW = panel._nameColWidth
+                    }
+                    onPositionChanged: function(mouse) {
+                        if (!pressed) return
+                        let currX = mapToItem(colHeader, mouse.x, 0).x
+                        let delta = currX - startX
+                        panel._nameColWidth = Math.max(60, startW + delta)
+                    }
+                }
+            }
+
+            // Value column header
+            Item {
+                id: valueHeaderCol
+                anchors.right: parent.right
+                width: parent.width - panel._nameColWidth - panel._typeColWidth
+                height: parent.height
+                Label {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left; anchors.leftMargin: 4
+                    text: "值"; color: "#888888"; font.pixelSize: 10
+                }
+                // Left resize handle (between type and value)
+                MouseArea {
+                    width: 6; height: parent.height
+                    anchors.left: parent.left; anchors.leftMargin: -3
+                    cursorShape: Qt.SplitHCursor
+                    property real startX: 0
+                    property real startW: 0
+                    onPressed: function(mouse) {
+                        startX = mapToItem(colHeader, mouse.x, 0).x
+                        startW = panel._typeColWidth
+                    }
+                    onPositionChanged: function(mouse) {
+                        if (!pressed) return
+                        let currX = mapToItem(colHeader, mouse.x, 0).x
+                        let delta = currX - startX
+                        panel._typeColWidth = Math.max(40, startW + delta)
+                    }
+                }
+            }
+        }
+
         ListView {
             id: attrList
             Layout.fillWidth: true; Layout.fillHeight: true
@@ -91,21 +172,23 @@ Rectangle {
             flickDeceleration: 100000
             boundsBehavior: Flickable.StopAtBounds
 
-            header: Rectangle {
-                width: attrList.width; height: 22; color: "#2d2d2d"
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 6
-                    spacing: 0
-                    Label { text: "属性名"; color: "#888888"; font.pixelSize: 10; Layout.preferredWidth: 150 }
-                    Label { text: "类型";   color: "#888888"; font.pixelSize: 10; Layout.preferredWidth: 80 }
-                    Label { text: "值";     color: "#888888"; font.pixelSize: 10; Layout.fillWidth: true }
-                }
-            }
+            property int selectedIndex: -1
 
             delegate: Rectangle {
+                id: attrDelegate
                 width: attrList.width; height: 32
-                color: index % 2 === 0 ? "#232323" : "#1e1e1e"
+                color: {
+                    if (attrList.selectedIndex === index)
+                        return "#007acc"
+                    else if (hoverHandler.hovered)
+                        return "#70007acc"
+                    return index % 2 === 0 ? "#232323" : "#1e1e1e"
+                }
+
+                HoverHandler { id: hoverHandler }
+                TapHandler {
+                    onTapped: attrList.selectedIndex = index
+                }
 
                 RowLayout {
                     anchors.fill: parent
@@ -116,11 +199,13 @@ Rectangle {
                     Label {
                         text: model.name; font.pixelSize: 11
                         color: model.isCustom ? "#9cdcfe" : "#c8c8c8"
-                        Layout.preferredWidth: 150; elide: Text.ElideRight
+                        Layout.preferredWidth: panel._nameColWidth - 6
+                        elide: Text.ElideRight; clip: true
                     }
                     Label {
                         text: model.typeName; font.pixelSize: 10; color: "#777777"
-                        Layout.preferredWidth: 80; elide: Text.ElideRight
+                        Layout.preferredWidth: panel._typeColWidth
+                        elide: Text.ElideRight; clip: true
                     }
                     TextField {
                         id: valField
