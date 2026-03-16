@@ -42,6 +42,7 @@ Rectangle {
         }
 
         onPrimClicked: function(primPath, ctrlHeld) {
+            panel.forceActiveFocus()
             let paths
             if (ctrlHeld) {
                 paths = panel.selectedPrimPaths.slice ? panel.selectedPrimPaths.slice() : []

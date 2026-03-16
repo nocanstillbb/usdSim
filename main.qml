@@ -122,6 +122,8 @@ ApplicationWindow {
         id: splitView
         anchors.fill: parent
         orientation: Qt.Horizontal
+        // Click anywhere to clear search field focus
+        TapHandler { onTapped: splitView.forceActiveFocus() }
 
         handle: Rectangle {
             id: handleControl
