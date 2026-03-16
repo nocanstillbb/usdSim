@@ -14,6 +14,9 @@
 #include <pxr/usd/sdf/path.h>
 #include <pxr/usd/sdf/types.h>
 #include <pxr/usd/usdGeom/imageable.h>
+#include <pxr/usd/usd/schemaRegistry.h>
+#include <pxr/usd/sdf/schema.h>
+#include <pxr/base/tf/type.h>
 #include <pxr/base/vt/value.h>
 #include <pxr/base/gf/vec2f.h>
 #include <pxr/base/gf/vec3f.h>
@@ -24,6 +27,7 @@
 
 #include <QQmlEngine>
 #include <map>
+#include <set>
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -176,6 +180,17 @@ static QString vtValueToString(const VtValue &val)
     std::ostringstream oss;
     oss << val;
     return QString::fromStdString(oss.str());
+}
+
+// ---- 工具函数：判断类型是否支持编辑 ----
+static bool isEditableType(const std::string &typeStr)
+{
+    static const std::set<std::string> editable = {
+        "bool", "int", "float", "double", "string", "token",
+        "float3", "color3f", "normal3f", "point3f", "vector3f",
+        "double3", "point3d", "vector3d",
+    };
+    return editable.count(typeStr) > 0;
 }
 
 // ---- 工具函数：字符串 → 写回 USD 属性 ----
@@ -359,10 +374,12 @@ QVariantList UsdDocument::getAttributes(const QString &primPath)
         attr.Get(&val);
 
         QVariantMap entry;
+        std::string typeStr = attr.GetTypeName().GetAsToken().GetString();
         entry["name"]     = QString::fromStdString(attr.GetName().GetString());
-        entry["typeName"] = QString::fromStdString(attr.GetTypeName().GetAsToken().GetString());
+        entry["typeName"] = QString::fromStdString(typeStr);
         entry["value"]    = vtValueToString(val);
         entry["isCustom"] = attr.IsCustom();
+        entry["readOnly"] = !isEditableType(typeStr);
         result << entry;
     }
     return result;
@@ -451,6 +468,7 @@ QVariantList UsdDocument::getCommonAttributes(const QStringList &primPaths)
         entry["typeName"] = it->typeName;
         entry["value"]    = it->mixed ? QStringLiteral("mixed") : it->value;
         entry["isCustom"] = it->isCustom;
+        entry["readOnly"] = !isEditableType(it->typeName.toStdString());
         result << entry;
     }
     return result;
@@ -743,6 +761,7 @@ void UsdDocument::loadAttributes(const QStringList &primPaths)
         info->typeName = m[QStringLiteral("typeName")].toString();
         info->value    = m[QStringLiteral("value")].toString();
         info->isCustom = m[QStringLiteral("isCustom")].toBool();
+        info->readOnly = m[QStringLiteral("readOnly")].toBool();
         am->appendItemNotNotify(info);
     }
 
@@ -782,6 +801,7 @@ void UsdDocument::refreshAttributes(const QStringList &primPaths)
         info->typeName = m[QStringLiteral("typeName")].toString();
         info->value    = m[QStringLiteral("value")].toString();
         info->isCustom = m[QStringLiteral("isCustom")].toBool();
+        info->readOnly = m[QStringLiteral("readOnly")].toBool();
         am->appendItem(info);
     }
 }
@@ -832,4 +852,225 @@ QString UsdDocument::readAttributeValue(const QString &primPath, const QString &
     VtValue val;
     attr.Get(&val);
     return vtValueToString(val);
+}
+
+// ---- Add Attribute ----
+bool UsdDocument::addAttribute(const QStringList &primPaths,
+                                const QString &attrName,
+                                const QString &typeName,
+                                bool custom,
+                                const QString &variability)
+{
+    if (!m_impl->stage || primPaths.isEmpty()) return false;
+
+    auto cmd = std::make_unique<AddAttributeCommand>(this, primPaths, attrName, typeName, custom, variability);
+    m_undoStack->push(std::move(cmd));
+    return true;
+}
+
+bool UsdDocument::addAttributeInternal(const QString &primPath,
+                                        const QString &attrName,
+                                        const QString &typeName,
+                                        bool custom,
+                                        const QString &variability)
+{
+    if (!m_impl->stage) return false;
+
+    SdfPath sdfPath(primPath.toStdString());
+    UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
+    if (!prim.IsValid()) return false;
+
+    // Map typeName string to SdfValueTypeName
+    SdfValueTypeName sdfType = SdfSchema::GetInstance().FindType(TfToken(typeName.toStdString()));
+    if (!sdfType) return false;
+
+    // Map variability
+    SdfVariability sdfVar = SdfVariabilityVarying;
+    if (variability == "Uniform")
+        sdfVar = SdfVariabilityUniform;
+
+    UsdAttribute attr = prim.CreateAttribute(TfToken(attrName.toStdString()),
+                                              sdfType, custom, sdfVar);
+    if (!attr.IsValid()) return false;
+
+    // Set type-appropriate default value so the attribute isn't empty
+    VtValue defaultVal = sdfType.GetDefaultValue();
+    if (!defaultVal.IsEmpty())
+        attr.Set(defaultVal);
+
+    emit stageModified();
+    return true;
+}
+
+// ---- Get Applied Schemas ----
+QStringList UsdDocument::getAppliedSchemas(const QString &primPath)
+{
+    QStringList result;
+    if (!m_impl->stage) return result;
+
+    SdfPath sdfPath(primPath.toStdString());
+    UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
+    if (!prim.IsValid()) return result;
+
+    TfTokenVector schemas = prim.GetAppliedSchemas();
+    for (const TfToken &tok : schemas)
+        result << QString::fromStdString(tok.GetString());
+    return result;
+}
+
+// ---- Get Available API Schemas ----
+QStringList UsdDocument::getAvailableApiSchemas()
+{
+    QStringList result;
+
+    // Get all registered applied API schema types
+    const auto &registry = UsdSchemaRegistry::GetInstance();
+
+    // Iterate all known schema types
+    std::set<TfType> apiTypes;
+    TfType base = TfType::FindByName("UsdAPISchemaBase");
+    if (base.IsUnknown()) return result;
+    base.GetAllDerivedTypes(&apiTypes);
+
+    for (const TfType &type : apiTypes) {
+        // Only include applied API schemas (not non-applied)
+        if (!registry.IsAppliedAPISchema(type))
+            continue;
+
+        // Get schema type name token
+        TfToken schemaName = UsdSchemaRegistry::GetSchemaTypeName(type);
+        if (!schemaName.IsEmpty())
+            result << QString::fromStdString(schemaName.GetString());
+    }
+
+    result.sort();
+    return result;
+}
+
+// ---- Apply API Schema ----
+bool UsdDocument::applyApiSchema(const QStringList &primPaths, const QString &schemaIdentifier)
+{
+    if (!m_impl->stage || primPaths.isEmpty()) return false;
+
+    auto cmd = std::make_unique<ApplyApiSchemaCommand>(this, primPaths, schemaIdentifier);
+    m_undoStack->push(std::move(cmd));
+    return true;
+}
+
+bool UsdDocument::applyApiSchemaInternal(const QString &primPath, const QString &schemaIdentifier)
+{
+    if (!m_impl->stage) return false;
+
+    SdfPath sdfPath(primPath.toStdString());
+    UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
+    if (!prim.IsValid()) return false;
+
+    // Record existing attribute names before applying
+    std::set<std::string> existingAttrs;
+    for (const UsdAttribute &attr : prim.GetAttributes())
+        existingAttrs.insert(attr.GetName().GetString());
+
+    bool ok = prim.ApplyAPI(TfToken(schemaIdentifier.toStdString()));
+    if (!ok) return false;
+
+    // Set type-appropriate defaults only for NEW attributes from the schema
+    for (const UsdAttribute &attr : prim.GetAttributes()) {
+        if (existingAttrs.count(attr.GetName().GetString()))
+            continue; // existed before, skip
+        VtValue val;
+        if (!attr.Get(&val) || val.IsEmpty()) {
+            VtValue defaultVal = attr.GetTypeName().GetDefaultValue();
+            if (!defaultVal.IsEmpty())
+                attr.Set(defaultVal);
+        }
+    }
+
+    emit stageModified();
+    return true;
+}
+
+// ---- Remove API Schema ----
+bool UsdDocument::removeApiSchema(const QStringList &primPaths, const QString &schemaIdentifier)
+{
+    if (!m_impl->stage || primPaths.isEmpty()) return false;
+
+    auto cmd = std::make_unique<RemoveApiSchemaCommand>(this, primPaths, schemaIdentifier);
+    m_undoStack->push(std::move(cmd));
+    return true;
+}
+
+bool UsdDocument::removeApiSchemaInternal(const QString &primPath, const QString &schemaIdentifier)
+{
+    if (!m_impl->stage) return false;
+
+    SdfPath sdfPath(primPath.toStdString());
+    UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
+    if (!prim.IsValid()) return false;
+
+    // Capture schema-defined property names BEFORE removal
+    std::set<std::string> definedBefore;
+    for (const TfToken &t : prim.GetPrimDefinition().GetPropertyNames())
+        definedBefore.insert(t.GetString());
+
+    bool ok = prim.RemoveAPI(TfToken(schemaIdentifier.toStdString()));
+    if (!ok) return false;
+
+    // Capture schema-defined property names AFTER removal
+    std::set<std::string> definedAfter;
+    for (const TfToken &t : prim.GetPrimDefinition().GetPropertyNames())
+        definedAfter.insert(t.GetString());
+
+    // Only remove properties that belonged to the removed schema
+    // (in definedBefore but not in definedAfter)
+    for (const std::string &name : definedBefore) {
+        if (definedAfter.count(name))
+            continue; // still defined by type or another schema
+        prim.RemoveProperty(TfToken(name));
+    }
+
+    emit stageModified();
+    return ok;
+}
+
+// ---- Remove Attribute ----
+bool UsdDocument::removeAttribute(const QStringList &primPaths, const QString &attrName)
+{
+    if (!m_impl->stage || primPaths.isEmpty()) return false;
+
+    QVector<RemoveAttributeCommand::Entry> entries;
+    for (const QString &primPath : primPaths) {
+        SdfPath sdfPath(primPath.toStdString());
+        UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
+        if (!prim.IsValid()) continue;
+
+        UsdAttribute attr = prim.GetAttribute(TfToken(attrName.toStdString()));
+        if (!attr.IsValid()) continue;
+
+        RemoveAttributeCommand::Entry e;
+        e.primPath = primPath;
+        e.typeName = QString::fromStdString(attr.GetTypeName().GetAsToken().GetString());
+        e.custom = attr.IsCustom();
+        e.variability = (attr.GetVariability() == SdfVariabilityUniform) ? "Uniform" : "Varying";
+        e.oldValue = readAttributeValue(primPath, attrName);
+        entries.append(e);
+    }
+
+    if (entries.isEmpty()) return false;
+
+    auto cmd = std::make_unique<RemoveAttributeCommand>(this, attrName, entries);
+    m_undoStack->push(std::move(cmd));
+    return true;
+}
+
+bool UsdDocument::removeAttributeInternal(const QString &primPath, const QString &attrName)
+{
+    if (!m_impl->stage) return false;
+
+    SdfPath sdfPath(primPath.toStdString());
+    UsdPrim prim = m_impl->stage->GetPrimAtPath(sdfPath);
+    if (!prim.IsValid()) return false;
+
+    bool ok = prim.RemoveProperty(TfToken(attrName.toStdString()));
+    if (ok) emit stageModified();
+    return ok;
 }

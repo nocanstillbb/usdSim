@@ -8,7 +8,8 @@ struct AttrInfo {
     QString typeName;
     QString value;
     bool isCustom = false;
+    bool readOnly = false;
 };
 
-PRISM_FIELDS(AttrInfo, name, typeName, value, isCustom)
+PRISM_FIELDS(AttrInfo, name, typeName, value, isCustom, readOnly)
 PRISMQT_CLASS(AttrInfo)

@@ -48,7 +48,9 @@ def Xform "World"
             uniform token[] xformOpOrder = ["xformOp:translate"]
         }
 
-        def Capsule "Capsule"
+        def Capsule "Capsule" (
+            delete apiSchemas = ["ClothPhysicsAPI"]
+        )
         {
             uniform token axis = "Y"
             double height = 2
