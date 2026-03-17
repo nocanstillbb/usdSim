@@ -26,8 +26,15 @@
 #include <pxr/usd/usdGeom/cone.h>
 #include <pxr/usd/usdGeom/capsule.h>
 #include <pxr/usd/usdGeom/plane.h>
+#include <pxr/usd/usdGeom/camera.h>
 #include <pxr/usd/usdGeom/metrics.h>
 #include <pxr/usd/usdGeom/imageable.h>
+#include <pxr/usd/usdLux/sphereLight.h>
+#include <pxr/usd/usdLux/distantLight.h>
+#include <pxr/usd/usdLux/rectLight.h>
+#include <pxr/usd/usdLux/diskLight.h>
+#include <pxr/usd/usdLux/domeLight.h>
+#include <pxr/usd/usdLux/cylinderLight.h>
 #include <pxr/base/gf/matrix4d.h>
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/vt/array.h>
@@ -302,6 +309,89 @@ static void genPlane(float width, float length,
     v <<  hw << 0 << -hl << 0 << 1 << 0;
     v << -hw << 0 << -hl << 0 << 1 << 0;
     idx << 0 << 1 << 2 << 0 << 2 << 3;
+}
+
+static void genDisk(float radius, QVector<float> &v, QVector<quint32> &idx)
+{
+    const int segs = 36;
+    v.clear(); idx.clear();
+    // center vertex
+    v << 0.f << 0.f << 0.f << 0.f << 1.f << 0.f;
+    for (int i = 0; i <= segs; i++) {
+        float t = 2.f * float(M_PI) * i / segs;
+        v << cosf(t)*radius << 0.f << sinf(t)*radius << 0.f << 1.f << 0.f;
+    }
+    for (int i = 0; i < segs; i++)
+        idx << 0 << i+1 << i+2;
+}
+
+static void genHemisphere(float r, QVector<float> &v, QVector<quint32> &idx)
+{
+    const int rings = 10, sectors = 36;
+    v.clear(); idx.clear();
+    for (int ri = 0; ri <= rings; ri++) {
+        float phi = float(M_PI_2) * ri / rings; // 0..π/2
+        float sp = sinf(phi), cp = cosf(phi);
+        for (int si = 0; si <= sectors; si++) {
+            float theta = 2.f * float(M_PI) * si / sectors;
+            float nx = cp * cosf(theta), ny = sp, nz = cp * sinf(theta);
+            v << nx*r << ny*r << nz*r << nx << ny << nz;
+        }
+    }
+    for (int ri = 0; ri < rings; ri++)
+        for (int si = 0; si < sectors; si++) {
+            quint32 a = ri*(sectors+1)+si, b = a+sectors+1;
+            idx << a << b << a+1 << a+1 << b << b+1;
+        }
+    // bottom cap (seal the hemisphere)
+    quint32 base = v.size() / 6;
+    v << 0.f << 0.f << 0.f << 0.f << -1.f << 0.f;
+    for (int i = 0; i <= sectors; i++) {
+        float t = 2.f * float(M_PI) * i / sectors;
+        v << cosf(t)*r << 0.f << sinf(t)*r << 0.f << -1.f << 0.f;
+    }
+    for (int i = 0; i < sectors; i++)
+        idx << base << base+i+2 << base+i+1;
+}
+
+static void genCameraFrustum(QVector<float> &v, QVector<quint32> &idx)
+{
+    v.clear(); idx.clear();
+    // small camera body box + lens cone
+    // body: 0.4 x 0.3 x 0.25 centered at origin
+    float bw = 0.2f, bh = 0.15f, bd = 0.125f;
+    struct Face { float nx,ny,nz; float p[4][3]; };
+    const Face faces[6] = {
+        { 0, 0, 1, {{-bw,-bh,bd},{bw,-bh,bd},{bw,bh,bd},{-bw,bh,bd}}},
+        { 0, 0,-1, {{ bw,-bh,-bd},{-bw,-bh,-bd},{-bw,bh,-bd},{bw,bh,-bd}}},
+        {-1, 0, 0, {{-bw,-bh,-bd},{-bw,-bh,bd},{-bw,bh,bd},{-bw,bh,-bd}}},
+        { 1, 0, 0, {{ bw,-bh,bd},{bw,-bh,-bd},{bw,bh,-bd},{bw,bh,bd}}},
+        { 0, 1, 0, {{-bw,bh,bd},{bw,bh,bd},{bw,bh,-bd},{-bw,bh,-bd}}},
+        { 0,-1, 0, {{-bw,-bh,-bd},{bw,-bh,-bd},{bw,-bh,bd},{-bw,-bh,bd}}}
+    };
+    quint32 base = 0;
+    for (auto &f : faces) {
+        for (int i = 0; i < 4; i++)
+            v << f.p[i][0] << f.p[i][1] << f.p[i][2] << f.nx << f.ny << f.nz;
+        idx << base << base+1 << base+2 << base << base+2 << base+3;
+        base += 4;
+    }
+    // lens: small cone in front (along -Z)
+    const int segs = 18;
+    float lr = 0.12f, ll = 0.15f;
+    float sl = sqrtf(lr*lr + ll*ll);
+    float nx_s = ll / sl, nz_s = lr / sl;
+    base = v.size() / 6;
+    for (int i = 0; i <= segs; i++) {
+        float t = 2.f * float(M_PI) * i / segs;
+        float cx = cosf(t), cy = sinf(t);
+        v << cx*lr << cy*lr << -bd << cx*nz_s << cy*nz_s << -nx_s;
+        v << 0.f << 0.f << -bd-ll << 0.f << 0.f << -1.f;
+    }
+    for (int i = 0; i < segs; i++) {
+        quint32 b = base + i*2;
+        idx << b << b+2 << b+1;
+    }
 }
 
 // ================================================================
@@ -1123,6 +1213,36 @@ void UsdViewportItem::buildMeshes()
             rotateVertsForAxis(verts, axis);
         } else if (type == "Mesh") {
             genMesh(UsdGeomMesh(prim), verts, indices);
+
+        // ── Light types ──
+        } else if (type == "SphereLight") {
+            double r = 0.5; UsdLuxSphereLight(prim).GetRadiusAttr().Get(&r);
+            genSphere(float(r), verts, indices);
+        } else if (type == "RectLight") {
+            double w = 1.0, h = 1.0;
+            UsdLuxRectLight rl(prim);
+            rl.GetWidthAttr().Get(&w);
+            rl.GetHeightAttr().Get(&h);
+            genPlane(float(w), float(h), verts, indices);
+        } else if (type == "DiskLight") {
+            double r = 0.5; UsdLuxDiskLight(prim).GetRadiusAttr().Get(&r);
+            genDisk(float(r), verts, indices);
+        } else if (type == "CylinderLight") {
+            double r = 0.5, l = 1.0; TfToken axis;
+            UsdLuxCylinderLight cl(prim);
+            cl.GetRadiusAttr().Get(&r);
+            cl.GetLengthAttr().Get(&l);
+            genCylinder(float(r), float(l), verts, indices);
+        } else if (type == "DistantLight") {
+            // Visual indicator: small cone pointing downward
+            genCone(0.3f, 0.6f, verts, indices);
+        } else if (type == "DomeLight") {
+            double r = 1.0; UsdLuxDomeLight(prim).GetGuideRadiusAttr().Get(&r);
+            genHemisphere(float(r), verts, indices);
+
+        // ── Camera ──
+        } else if (type == "Camera") {
+            genCameraFrustum(verts, indices);
         } else {
             continue;
         }
@@ -1133,13 +1253,24 @@ void UsdViewportItem::buildMeshes()
         md.vertices = std::move(verts);
         md.indices  = std::move(indices);
 
-        // Display color — use palette fallback when not authored
-        UsdGeomGprim gprim(prim);
-        VtArray<GfVec3f> colors;
-        gprim.GetDisplayColorAttr().Get(&colors);
-        md.color = colors.empty()
-                   ? colorForMesh(meshColorIndex)
-                   : QVector3D(colors[0][0], colors[0][1], colors[0][2]);
+        // Display color — lights/camera use fixed colors, geometry uses displayColor
+        static const QVector3D lightColor(1.0f, 0.84f, 0.0f);  // warm yellow
+        static const QVector3D cameraColor(0.5f, 0.6f, 0.7f);  // blue-gray
+        bool isLight = (type == "SphereLight" || type == "RectLight" ||
+                        type == "DiskLight"   || type == "CylinderLight" ||
+                        type == "DistantLight" || type == "DomeLight");
+        if (isLight) {
+            md.color = lightColor;
+        } else if (type == "Camera") {
+            md.color = cameraColor;
+        } else {
+            UsdGeomGprim gprim(prim);
+            VtArray<GfVec3f> colors;
+            gprim.GetDisplayColorAttr().Get(&colors);
+            md.color = colors.empty()
+                       ? colorForMesh(meshColorIndex)
+                       : QVector3D(colors[0][0], colors[0][1], colors[0][2]);
+        }
         meshColorIndex++;
 
         // World transform via XformCache

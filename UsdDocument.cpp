@@ -24,6 +24,8 @@
 #include <pxr/base/gf/vec2d.h>
 #include <pxr/base/gf/vec3d.h>
 #include <pxr/base/tf/token.h>
+#include <pxr/usd/usdGeom/mesh.h>
+#include <pxr/usd/usdGeom/xformable.h>
 
 #include <QQmlEngine>
 #include <map>
@@ -100,6 +102,53 @@ public:
             }
         }
         setRootNode(root);
+    }
+
+    // Incremental insert: add a single prim node without resetting the model
+    void insertPrimNode(const std::string &primPath, const UsdStageRefPtr &stage) {
+        UsdPrim prim = stage->GetPrimAtPath(SdfPath(primPath));
+        if (!prim.IsValid()) return;
+
+        auto info = std::make_shared<PrimInfo>();
+        info->name     = prim.GetName().GetString();
+        info->path     = prim.GetPath().GetString();
+        info->typeName = prim.GetTypeName().GetString();
+        UsdGeomImageable imageable(prim);
+        info->isActive = !imageable
+            || imageable.ComputeVisibility() != UsdGeomTokens->invisible;
+
+        auto node = std::make_shared<NodeProxy>(info);
+
+        std::string parentPathStr = prim.GetPath().GetParentPath().GetString();
+        QModelIndex parentIdx;
+        NodeProxy *parentNode = rootNode().get();
+        if (parentPathStr != "/") {
+            parentIdx = indexForPath(QString::fromStdString(parentPathStr));
+            if (parentIdx.isValid())
+                parentNode = static_cast<NodeProxy *>(parentIdx.internalPointer());
+        }
+
+        int row = parentNode->childCount();
+        beginInsertRows(parentIdx, row, row);
+        node->setParentItem(parentNode->shared_from_this());
+        QQmlEngine::setObjectOwnership(node.get(), QQmlEngine::ObjectOwnership::CppOwnership);
+        parentNode->m_childItems.push_back(node);
+        endInsertRows();
+    }
+
+    // Incremental insert: add a prim and all its descendants
+    void insertSubtree(const std::string &rootPrimPath, const UsdStageRefPtr &stage) {
+        UsdPrim rootPrim = stage->GetPrimAtPath(SdfPath(rootPrimPath));
+        if (!rootPrim.IsValid()) return;
+        for (const UsdPrim &prim : UsdPrimRange(rootPrim))
+            insertPrimNode(prim.GetPath().GetString(), stage);
+    }
+
+    // Incremental remove: remove a node (and its children) by path
+    void removePrimNode(const QString &path) {
+        QModelIndex idx = indexForPath(path);
+        if (idx.isValid())
+            removeNode(idx);
     }
 
 private:
@@ -306,6 +355,37 @@ void UsdDocument::refreshPrimPaths()
     m_impl->primTreeModel->rebuild(m_impl->stage);
 
     emit primPathsChanged();
+}
+
+void UsdDocument::refreshPrimList()
+{
+    m_primPaths.clear();
+
+    m_impl->primModel->pub_beginResetModel();
+    m_impl->primModel->removeAllItemsNotNotify();
+
+    if (m_impl->stage) {
+        for (const UsdPrim &prim : m_impl->stage->Traverse()) {
+            QString path = QString::fromStdString(prim.GetPath().GetString());
+            m_primPaths << path;
+
+            auto info = std::make_shared<PrimInfo>();
+            info->name     = prim.GetName().GetString();
+            info->path     = prim.GetPath().GetString();
+            info->typeName = prim.GetTypeName().GetString();
+            info->isActive = true;
+            m_impl->primModel->appendItemNotNotify(info);
+        }
+    }
+
+    m_impl->primModel->pub_endResetModel();
+    emit primPathsChanged();
+}
+
+void UsdDocument::insertPrimSubtree(const QString &primPath)
+{
+    if (!m_impl->stage) return;
+    m_impl->primTreeModel->insertSubtree(primPath.toStdString(), m_impl->stage);
 }
 
 // ---- 公开方法 ----
@@ -592,7 +672,89 @@ bool UsdDocument::addPrimInternal(const QString &parentPath,
     UsdPrim prim = m_impl->stage->DefinePrim(newPath, TfToken(typeName.toStdString()));
     if (!prim.IsValid()) return false;
 
-    refreshPrimPaths();
+    // Add xformOp:translate so the gizmo can move the prim immediately
+    UsdGeomXformable xformable(prim);
+    if (xformable) {
+        xformable.AddTranslateOp();
+        prim.GetAttribute(TfToken("xformOp:translate")).Set(GfVec3f(0, 0, 0));
+    }
+
+    // Set axis="Y" for axis-dependent geometry types
+    if (typeName == "Cylinder" || typeName == "Cone" || typeName == "Capsule" || typeName == "Plane") {
+        prim.GetAttribute(TfToken("axis")).Set(TfToken("Y"));
+    }
+
+    // Ground Plane: large plane at Y=0 with gray display color
+    if (name == "GroundPlane" && typeName == "Plane") {
+        prim.GetAttribute(TfToken("width")).Set(2500.0);
+        prim.GetAttribute(TfToken("length")).Set(2500.0);
+        VtArray<GfVec3f> displayColor;
+        displayColor.push_back(GfVec3f(0.5f, 0.5f, 0.5f));
+        prim.GetAttribute(TfToken("primvars:displayColor")).Set(displayColor);
+    }
+
+    // Generate procedural mesh data for Disk and Torus (created as Mesh type)
+    if (typeName == "Mesh" && (name == "Disk" || name == "Torus")) {
+        UsdGeomMesh mesh(prim);
+        if (name == "Disk") {
+            const int segs = 36;
+            const float r = 1.0f;
+            VtArray<GfVec3f> points(segs + 1);
+            VtArray<GfVec3f> normals(1);
+            VtArray<int> fvc(segs), fvi;
+            points[0] = GfVec3f(0, 0, 0);
+            for (int i = 0; i < segs; i++) {
+                float t = 2.f * float(M_PI) * i / segs;
+                points[i + 1] = GfVec3f(cosf(t) * r, 0, sinf(t) * r);
+            }
+            normals[0] = GfVec3f(0, 1, 0);
+            for (int i = 0; i < segs; i++) {
+                fvc[i] = 3;
+                fvi.push_back(0);
+                fvi.push_back(i + 1);
+                fvi.push_back((i + 1) % segs + 1);
+            }
+            mesh.GetPointsAttr().Set(points);
+            mesh.GetFaceVertexCountsAttr().Set(fvc);
+            mesh.GetFaceVertexIndicesAttr().Set(fvi);
+            mesh.GetNormalsAttr().Set(normals);
+            mesh.SetNormalsInterpolation(UsdGeomTokens->uniform);
+        } else { // Torus
+            const int majorSegs = 48, minorSegs = 16;
+            const float majorR = 1.0f, minorR = 0.25f;
+            VtArray<GfVec3f> points;
+            VtArray<int> fvc, fvi;
+            for (int i = 0; i < majorSegs; i++) {
+                float theta = 2.f * float(M_PI) * i / majorSegs;
+                float ct = cosf(theta), st = sinf(theta);
+                for (int j = 0; j < minorSegs; j++) {
+                    float phi = 2.f * float(M_PI) * j / minorSegs;
+                    float cp = cosf(phi), sp = sinf(phi);
+                    float x = (majorR + minorR * cp) * ct;
+                    float y = minorR * sp;
+                    float z = (majorR + minorR * cp) * st;
+                    points.push_back(GfVec3f(x, y, z));
+                }
+            }
+            for (int i = 0; i < majorSegs; i++) {
+                int nextI = (i + 1) % majorSegs;
+                for (int j = 0; j < minorSegs; j++) {
+                    int nextJ = (j + 1) % minorSegs;
+                    fvc.push_back(4);
+                    fvi.push_back(i * minorSegs + j);
+                    fvi.push_back(nextI * minorSegs + j);
+                    fvi.push_back(nextI * minorSegs + nextJ);
+                    fvi.push_back(i * minorSegs + nextJ);
+                }
+            }
+            mesh.GetPointsAttr().Set(points);
+            mesh.GetFaceVertexCountsAttr().Set(fvc);
+            mesh.GetFaceVertexIndicesAttr().Set(fvi);
+        }
+    }
+
+    m_impl->primTreeModel->insertPrimNode(newPath.GetString(), m_impl->stage);
+    refreshPrimList();
     emit stageModified();
     return true;
 }
@@ -613,7 +775,8 @@ bool UsdDocument::removePrimInternal(const QString &primPath)
 
     bool ok = m_impl->stage->RemovePrim(SdfPath(primPath.toStdString()));
     if (ok) {
-        refreshPrimPaths();
+        m_impl->primTreeModel->removePrimNode(primPath);
+        refreshPrimList();
         emit stageModified();
     }
     return ok;

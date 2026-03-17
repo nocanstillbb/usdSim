@@ -242,7 +242,7 @@ Rectangle {
         anchors.fill: parent
         acceptedButtons: Qt.RightButton
         onClicked: function(mouse) {
-            if (panel.selectedPrimPaths.length > 0)
+            if (panel.document.isOpen)
                 viewportCtxMenu.popup()
         }
     }
@@ -251,6 +251,17 @@ Rectangle {
         id: viewportCtxMenu
         onAddAttributeRequested: addAttrDialog.openDialog()
         onEditApiSchemaRequested: editSchemaDialog.openDialog()
+        onCreatePrimRequested: function(name, typeName) {
+            let parentPath = panel.selectedPrimPaths.length > 0 ? panel.selectedPrimPaths[0] : "/"
+            panel.document.addPrim(parentPath, name, typeName)
+        }
+        onDeletePrimRequested: {
+            let paths = panel.selectedPrimPaths.slice ? panel.selectedPrimPaths.slice() : []
+            for (let i = paths.length - 1; i >= 0; --i)
+                panel.document.removePrim(paths[i])
+            panel.selectedPrimPaths = []
+            panel.selectionChanged([])
+        }
     }
 
     AddAttributeDialog {

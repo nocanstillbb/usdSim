@@ -102,7 +102,9 @@ AddPrimCommand::AddPrimCommand(UsdDocument *doc,
                                const QString &typeName)
     : m_doc(doc), m_parentPath(parentPath), m_name(name), m_typeName(typeName)
 {
-    m_fullPath = m_parentPath + QStringLiteral("/") + m_name;
+    m_fullPath = m_parentPath.endsWith('/')
+        ? m_parentPath + m_name
+        : m_parentPath + QStringLiteral("/") + m_name;
 }
 
 void AddPrimCommand::undo()
@@ -157,7 +159,8 @@ void RemovePrimCommand::undo()
         SdfPath sdfPath(m_primPath.toStdString());
         SdfCopySpec(*backup, sdfPath, rootLayer, sdfPath);
     }
-    m_doc->refreshPrimPaths();
+    m_doc->insertPrimSubtree(m_primPath);
+    m_doc->refreshPrimList();
     emit m_doc->stageModified();
 }
 

@@ -11,7 +11,7 @@ find_package(QT NAMES Qt6 Qt5 COMPONENTS Core REQUIRED)
 find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Gui Widgets Quick Qml QuickControls2   REQUIRED)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core)
 # ---- Find OpenUSD ----
-find_package(pxr REQUIRED usd stage usdGeom sdf tf vt gf ar boost python)
+find_package(pxr REQUIRED usd stage usdGeom usdLux sdf tf vt gf ar boost python)
 include_directories( "${PXR_INCLUDE_DIRS}"
                      "$ENV{CONDA_PREFIX}/include/python3.11")
 set(OPENUSD_links    $ENV{CONDA_PREFIX}/lib/libpython3.11.so)
@@ -76,6 +76,7 @@ target_link_libraries(apptest_qmlcmp PRIVATE
     ${PXR_usd_LIBRARY}
     ${PXR_stage_LIBRARY}
     ${PXR_usdGeom_LIBRARY}
+    ${PXR_usdLux_LIBRARY}
     ${PXR_sdf_LIBRARY}
     ${PXR_tf_LIBRARY}
     ${PXR_vt_LIBRARY}
