@@ -63,7 +63,7 @@ pixi install
 
 ```bash
 # 传入 OpenUSD 安装目录
-pixi run python build.py <pxr_install_dir>
+pixi run build <pxr_install_dir>
 ```
 
 ### 运行

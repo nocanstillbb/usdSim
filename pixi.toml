@@ -18,4 +18,8 @@ libegl-devel = "*"
 xorg-libx11 = "*"
 xorg-libxext = "*"
 
+[tasks.build]
+cmd = "python build.py {{ pxr_dir }}"
+args = ["pxr_dir"]
+
 
