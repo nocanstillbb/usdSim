@@ -15,7 +15,7 @@ int main(int argc, char *argv[])
     qmlRegisterType<UsdViewportItem>("UsdBrowser", 1, 0, "UsdViewport");
 
     QQmlApplicationEngine engine;
-    const QUrl url(QStringLiteral("qrc:/test_qmlcmp/main.qml"));
+    const QUrl url(QStringLiteral("qrc:/usdSim/main.qml"));
     QObject::connect(
         &engine,
         &QQmlApplicationEngine::objectCreated,
