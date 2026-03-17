@@ -1,0 +1,21 @@
+[project]
+name = "usdSim"
+version = "0.1.0"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = "3.11.*"
+qt6-main = "6.8.3.*"
+pyside6 = "6.8.3.*"
+cmake = ">=3.16"
+ninja = "*"
+cxx-compiler = "*"
+pkg-config = "*"
+libgl-devel = "*"
+libglx-devel = "*"
+libegl-devel = "*"
+xorg-libx11 = "*"
+xorg-libxext = "*"
+
+
