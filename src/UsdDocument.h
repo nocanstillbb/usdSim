@@ -35,6 +35,9 @@ public:
     UndoStack *undoStack() const { return m_undoStack; }
 
     Q_INVOKABLE bool open(const QString &path);
+    Q_INVOKABLE bool openFromStageCache(long cacheId);
+    Q_INVOKABLE long insertToStageCache();
+    Q_INVOKABLE void notifyStageModified(const QStringList &modifiedPrimPaths = {});
     Q_INVOKABLE bool save();
     Q_INVOKABLE bool saveAs(const QString &path);
     Q_INVOKABLE void close();
@@ -138,7 +141,7 @@ public:
 
 signals:
     void primPathsChanged();
-    void stageModified();   // 属性值改变，mesh 需重建
+    void stageModified(const QStringList &modifiedPrimPaths);   // 属性值改变，mesh 需重建
     void filePathChanged();
     void isOpenChanged();
     void errorStringChanged();

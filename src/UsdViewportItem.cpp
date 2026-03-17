@@ -1089,7 +1089,7 @@ void UsdViewportItem::setDocument(UsdDocument *doc)
         connect(m_doc, &UsdDocument::primPathsChanged,
                 this, &UsdViewportItem::onDocumentChanged);
         connect(m_doc, &UsdDocument::stageModified,
-                this, &UsdViewportItem::onDocumentChanged);
+                this, [this]() { onDocumentChanged(); });
         connect(m_doc, &UsdDocument::filePathChanged,
                 this, [this]{ m_cameraInitialized = false; });
     }

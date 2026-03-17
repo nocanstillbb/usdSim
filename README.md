@@ -14,17 +14,20 @@
 - **属性编辑**：查看和修改 Prim 属性，实时同步到视口
 - **撤销/重做**：完整的操作历史记录
 - **文件支持**：打开/保存 `.usd`、`.usda`、`.usdc`、`.usdz` 格式
+- **Python 绑定**：通过 pybind11 暴露 `pyusdSim` 模块，支持 Python-C++ 共享 USD Stage
 
 ## 项目结构
 
 ```
 ├── src/
-│   ├── main.cpp                 # 应用入口，注册 QML 类型，启动 InspectorServer
+│   ├── main.cpp                 # 应用入口
+│   ├── UsdSimApp.h/cpp          # App 封装：类型注册、初始化、findDocument、processEvents
 │   ├── UsdViewportItem.h/cpp    # 3D 视口渲染（RHI）、Gizmo、网格、相机
-│   ├── UsdDocument.h/cpp        # USD 文件 I/O、Prim/属性操作
+│   ├── UsdDocument.h/cpp        # USD Stage 管理、Prim/属性 CRUD、StageCache 共享、撤销/重做
 │   ├── UndoStack.h              # 撤销/重做栈
 │   ├── UndoCommands.h/cpp       # 撤销/重做命令实现
 │   ├── PrimInfo.h / AttrInfo.h  # 数据结构
+│   ├── bindings.cpp             # pybind11 模块（pyusdSim）
 │   ├── qml/
 │   │   ├── main.qml             # 主窗口布局（三栏分割）
 │   │   ├── ViewportPanel.qml    # 视口面板
@@ -34,9 +37,12 @@
 │   │   └── ...                  # 其他 QML 组件
 │   ├── shaders/                 # GLSL 顶点/片段着色器
 │   └── icons/                   # SVG 图标资源
-├── python/                      # Python 代码（预留）
-├── build.py                     # Python 构建脚本
-├── pixi.toml                    # Pixi (conda-forge) 环境配置
+├── python/examples/
+│   └── test_shared_stage/
+│       ├── main.py              # Python-C++ 共享 Stage 演示
+│       └── sample.usda          # 测试用 USD 文件
+├── build.py                     # 构建脚本（同时生成 build/usdsim_env.py）
+├── pixi.toml                    # Pixi (conda-forge) 环境配置 + 任务定义
 ├── third_party/
 │   ├── playqmlright/            # Git 子模块：Qt Inspector + MCP Server
 │   └── prism_all/               # Git 子模块：UI 框架库
@@ -66,13 +72,23 @@ pixi install
 pixi run build <pxr_install_dir>
 ```
 
-### 运行
+构建完成后会自动生成 `build/usdsim_env.py`，用于设置 Python 运行时所需的路径。
+
+### 运行 C++ 应用
 
 ```bash
 ./build/bin/usdSim
 ```
 
 应用启动后会在端口 **37521** 上开启 Inspector Server（可通过 `QML_INSPECTOR_PORT` 环境变量修改）。
+
+### 运行 Python 示例
+
+```bash
+pixi run py-example python/examples/test_shared_stage/main.py
+```
+
+`py-example` 任务通过 `build/usdsim_env.py` 自动设置 `sys.path`（pyusdSim + pxr）和 `LD_LIBRARY_PATH`（conda libstdc++、USD 动态库），跨平台兼容。
 
 ## MCP 集成
 
@@ -90,6 +106,52 @@ pixi run build <pxr_install_dir>
 2. Claude Code 通过 `.mcp.json` 配置的 MCP 工具与应用交互
 3. 工具通过 TCP JSON-RPC 与 InspectorServer 通信
 4. 所有交互为合成事件注入，无需窗口前台焦点
+
+## Python-C++ 共享 USD Stage
+
+通过 `UsdUtilsStageCache` 实现 Python 和 C++ 共享同一个 USD Stage 实例：
+
+```python
+from pxr import Usd, UsdUtils
+import pyusdSim
+
+# Python 端打开 Stage 并放入缓存
+stage = Usd.Stage.Open("scene.usda")
+cache_id = UsdUtils.StageCache.Get().Insert(stage)
+
+# 启动 Qt 应用
+app = pyusdSim.UsdSimApp()
+app.register_types()
+app.init(["usdSim"])
+
+# C++ 端通过 cache ID 加载同一个 Stage
+doc = app.find_document()
+doc.open_from_stage_cache(cache_id.ToLongInt())
+
+# Python 修改 Stage 后通知 C++ 刷新视口
+# 传入修改的 prim 路径列表，属性面板仅在选中的 prim 被修改时才刷新
+doc.notify_stage_modified(["/World/Cube"])
+
+# 事件循环
+while True:
+    app.process_events()
+```
+
+### pyusdSim API
+
+| 类 | 方法 | 说明 |
+|----|------|------|
+| `UsdSimApp` | `register_types()` | 注册 QML 类型 |
+| | `init(args)` | 初始化 Qt 应用和 QML 引擎 |
+| | `exec()` | 进入 Qt 事件循环（阻塞） |
+| | `find_document()` | 获取 QML 中的 UsdDocument 实例 |
+| | `process_events()` | 手动处理一轮 Qt 事件（非阻塞） |
+| | `uninit()` / `unregister_types()` | 清理 |
+| `UsdDocument` | `open(path)` | 打开 USD 文件 |
+| | `open_from_stage_cache(id)` | 从 StageCache 加载已有 Stage |
+| | `insert_to_stage_cache()` | 将当前 Stage 放入 StageCache，返回 ID |
+| | `notify_stage_modified(paths=[])` | 通知视口重建 mesh，可选传入修改的 prim 路径 |
+| | `is_open()` / `file_path()` | 查询状态 |
 
 ## 操作说明
 
