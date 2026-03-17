@@ -131,6 +131,10 @@ public:
 
     // Expose refreshPrimPaths for undo commands (e.g. RemovePrimCommand::undo)
     void refreshPrimPaths();
+    // Update flat list model + m_primPaths only (preserves tree expand state)
+    void refreshPrimList();
+    // Incremental tree insert: insert a prim subtree into tree model
+    void insertPrimSubtree(const QString &primPath);
 
 signals:
     void primPathsChanged();

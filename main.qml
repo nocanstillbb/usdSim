@@ -22,6 +22,20 @@ ApplicationWindow {
     Shortcut { sequence: StandardKey.Undo;  onActivated: doc.undo() }
     Shortcut { sequence: StandardKey.Redo;  onActivated: doc.redo() }
     Shortcut { sequence: "Ctrl+Y";          onActivated: doc.redo() }
+    Shortcut {
+        sequence: StandardKey.Delete
+        onActivated: {
+            let paths = root.selectedPrimPaths.slice ? root.selectedPrimPaths.slice() : []
+            for (let i = paths.length - 1; i >= 0; --i)
+                doc.removePrim(paths[i])
+            root.selectedPrimPaths = []
+            root.selectedPrimPath = ""
+            viewportPanel.selectPrimPaths([])
+            primTreePanel.selectedPrimPaths = []
+            attrPanel.selectedPrimPaths = []
+            attrPanel.selectedPrimPath = ""
+        }
+    }
 
     // Refresh attribute panel after undo/redo
     Connections {

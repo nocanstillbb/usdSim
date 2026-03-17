@@ -51,6 +51,20 @@ Rectangle {
         id: primCtxMenu
         onAddAttributeRequested: primAddAttrDialog.openDialog()
         onEditApiSchemaRequested: primEditSchemaDialog.openDialog()
+        onCreatePrimRequested: function(name, typeName) {
+            let parentPath = panel.selectedPrimPaths.length > 0 ? panel.selectedPrimPaths[0] : "/"
+            let ok = panel.document.addPrim(parentPath, name, typeName)
+            panel.statusMessage(ok ? "已创建: " + parentPath + "/" + name : "创建失败")
+        }
+        onDeletePrimRequested: {
+            let paths = panel.selectedPrimPaths.slice ? panel.selectedPrimPaths.slice() : []
+            for (let i = paths.length - 1; i >= 0; --i)
+                panel.document.removePrim(paths[i])
+            panel._internalChange = true
+            panel.selectedPrimPaths = []
+            panel.selectionChanged([])
+            panel._internalChange = false
+        }
     }
 
     AddAttributeDialog {
