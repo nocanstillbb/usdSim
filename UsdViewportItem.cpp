@@ -1040,6 +1040,31 @@ void UsdViewportItem::buildMeshes()
     // Unit scale: convert stage units to centimeters
     double metersPerUnit = UsdGeomGetStageMetersPerUnit(stage);
     m_unitScale = float(metersPerUnit / 0.01);
+
+    // Derive unit label from metersPerUnit
+    auto unitLabel = [](double mpu) -> QString {
+        constexpr struct { double mpu; const char *label; } known[] = {
+            { 0.001,    "mm" },
+            { 0.01,     "cm" },
+            { 0.0254,   "in" },
+            { 0.1,      "dm" },
+            { 0.3048,   "ft" },
+            { 0.9144,   "yd" },
+            { 1.0,      "m"  },
+            { 1000.0,   "km" },
+            { 1609.344, "mi" },
+        };
+        for (auto &u : known) {
+            if (std::abs(mpu - u.mpu) / std::max(mpu, u.mpu) < 1e-6)
+                return QLatin1String(u.label);
+        }
+        return QStringLiteral("%1 m").arg(mpu);
+    };
+    QString newLabel = unitLabel(metersPerUnit);
+    if (m_stageUnitLabel != newLabel) {
+        m_stageUnitLabel = newLabel;
+        emit stageUnitLabelChanged();
+    }
     QMatrix4x4 unitScaleMat;
     unitScaleMat.scale(m_unitScale);
 

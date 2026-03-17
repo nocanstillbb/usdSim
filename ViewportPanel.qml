@@ -231,7 +231,7 @@ Rectangle {
         Text {
             id: cmLabel
             anchors.centerIn: parent
-            text: "cm"
+            text: viewport.stageUnitLabel
             color: "#888888"
             font.pixelSize: 16
         }

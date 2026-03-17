@@ -61,6 +61,7 @@ class UsdViewportItem : public QQuickRhiItem
     Q_PROPERTY(QPointF orientLabelZ READ orientLabelZ NOTIFY orientLabelsChanged)
     Q_PROPERTY(bool showGrid READ showGrid WRITE setShowGrid NOTIFY showGridChanged)
     Q_PROPERTY(bool snapEnabled READ snapEnabled WRITE setSnapEnabled NOTIFY snapEnabledChanged)
+    Q_PROPERTY(QString stageUnitLabel READ stageUnitLabel NOTIFY stageUnitLabelChanged)
     QML_ELEMENT
 
 public:
@@ -95,6 +96,7 @@ public:
     void setShowGrid(bool on);
     bool snapEnabled() const { return m_snapEnabled; }
     void setSnapEnabled(bool on);
+    QString stageUnitLabel() const { return m_stageUnitLabel; }
     const QVector<GizmoMeshData> &gridMeshes() const { return m_gridMeshes; }
     bool gridDirty() const { return m_gridDirty; }
     void clearGridDirty() { m_gridDirty = false; }
@@ -116,6 +118,7 @@ signals:
     void orientLabelsChanged();
     void showGridChanged();
     void snapEnabledChanged();
+    void stageUnitLabelChanged();
 
 protected:
     void mousePressEvent(QMouseEvent *e) override;
@@ -179,6 +182,7 @@ private:
     QVector3D  m_cameraEye;
     bool       m_zUp = true;
     float      m_unitScale = 1.f;
+    QString    m_stageUnitLabel = QStringLiteral("cm");
     bool       m_cameraInitialized = false;
 
     QMatrix4x4 m_view;
