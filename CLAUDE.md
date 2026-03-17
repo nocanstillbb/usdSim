@@ -115,7 +115,7 @@ pixi.toml
 pixi install
 
 # Build (pass OpenUSD install directory)
-pixi run python build.py /home/cnf2025581067/source/installed
+pixi run build /home/cnf2025581067/source/installed
 
 # Run the application
 ./build/bin/usdSim
