@@ -62,9 +62,15 @@ Popup {
             font.pixelSize: 16; font.bold: true; color: AppStyle.textWhite
         }
         Label {
-            text: "Prim: " + (root.selectedPrimPaths.length > 0 ? root.selectedPrimPaths[0] : "")
+            text: {
+                let paths = root.selectedPrimPaths
+                let n = paths.length
+                if (n === 0) return "Prim: (none)"
+                let header = "Prim (" + n + "):"
+                let show = paths.slice(0, 5).join("\n")
+                return n > 5 ? header + "\n" + show + "\n..." : header + "\n" + show
+            }
             color: AppStyle.textSecondary; font.pixelSize: AppStyle.fontSizeSmall
-            elide: Text.ElideMiddle
             Layout.fillWidth: true
         }
 
