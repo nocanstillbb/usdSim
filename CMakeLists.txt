@@ -19,9 +19,7 @@ set(OPENUSD_links    $ENV{CONDA_PREFIX}/lib/libpython3.11.so)
 add_subdirectory(third_party/playqmlright)
 add_subdirectory(third_party/prism_all)
 
-message("111111111")
 message("${PXR_INCLUDE_DIRS}")
-message("22222222")
 
 qt_add_executable(usdSim
     main.cpp

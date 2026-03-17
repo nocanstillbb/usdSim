@@ -7,3 +7,4 @@ package-lock.json
 !xarm6_with_gripper.usd
 **/*.zip
 **/vcpkg_installed
+pixi.lock
