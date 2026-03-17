@@ -3,4 +3,4 @@
 	url = https://github.com/nocanstillbb/playqmlright.git
 [submodule "prism_all"]
 	path = third_party/prism_all
-	url = git@github.com:cpp-prism/prism_all.git
+	url = https://github.com/cpp-prism/prism_all.git
