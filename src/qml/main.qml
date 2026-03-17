@@ -89,7 +89,7 @@ ApplicationWindow {
             Repeater {
                 model: [
                     { label: "打开",   enabled: true,        action: function(){ openDialog.open() } },
-                    { label: "测试文件", enabled: true,      action: function(){ doc.open("/home/cnf2025581067/source/repos/test_qmlmcp_server/test_scene.usda") } },
+                    { label: "测试文件", enabled: true,      action: function(){ doc.open("assets/usd/test_scene.usda") } },
                     { label: "保存",   enabled: doc.isOpen,  action: function(){ doc.save(); statusText.text = "已保存" } },
                     { label: "另存为", enabled: doc.isOpen,  action: function(){ saveAsDialog.open() } },
                     { label: "关闭",   enabled: doc.isOpen,  action: function(){

@@ -1,5 +1,5 @@
 # USD 浏览器 (USD Browser)
-![screenshot](scennshot.png)
+![screenshot](docs/scennshot.png)
   
 基于 Qt Quick 和 OpenUSD 的轻量级 3D 场景浏览与编辑器，内置 MCP Inspector 支持运行时 UI 自动化。
 
@@ -18,46 +18,58 @@
 ## 项目结构
 
 ```
-├── main.cpp                 # 应用入口，注册 QML 类型，启动 InspectorServer
-├── main.qml                 # 主窗口布局（三栏分割）
-├── UsdViewportItem.h/cpp    # 3D 视口渲染（RHI）、Gizmo、网格、相机
-├── UsdDocument.h/cpp        # USD 文件 I/O、Prim/属性操作
-├── UndoStack.h              # 撤销/重做栈
-├── UndoCommands.h/cpp       # 撤销/重做命令实现
-├── ViewportPanel.qml        # 视口面板（工具栏、方位指示器、cm 标签）
-├── PrimTreePanel.qml        # Prim 层级树面板
-├── AttributePanel.qml       # 属性编辑面板
-├── HistoryPanel.qml         # 操作历史面板
-├── shaders/                 # GLSL 顶点/片段着色器
-├── icons/                   # SVG 图标资源
-├── playqmlright/            # Git 子模块：Qt Inspector + MCP Server
-└── prism_all/               # Git 子模块：UI 框架库
+├── src/
+│   ├── main.cpp                 # 应用入口，注册 QML 类型，启动 InspectorServer
+│   ├── UsdViewportItem.h/cpp    # 3D 视口渲染（RHI）、Gizmo、网格、相机
+│   ├── UsdDocument.h/cpp        # USD 文件 I/O、Prim/属性操作
+│   ├── UndoStack.h              # 撤销/重做栈
+│   ├── UndoCommands.h/cpp       # 撤销/重做命令实现
+│   ├── PrimInfo.h / AttrInfo.h  # 数据结构
+│   ├── qml/
+│   │   ├── main.qml             # 主窗口布局（三栏分割）
+│   │   ├── ViewportPanel.qml    # 视口面板
+│   │   ├── PrimTreePanel.qml    # Prim 层级树面板
+│   │   ├── AttributePanel.qml   # 属性编辑面板
+│   │   ├── HistoryPanel.qml     # 操作历史面板
+│   │   └── ...                  # 其他 QML 组件
+│   ├── shaders/                 # GLSL 顶点/片段着色器
+│   └── icons/                   # SVG 图标资源
+├── python/                      # Python 代码（预留）
+├── build.py                     # Python 构建脚本
+├── pixi.toml                    # Pixi (conda-forge) 环境配置
+├── third_party/
+│   ├── playqmlright/            # Git 子模块：Qt Inspector + MCP Server
+│   └── prism_all/               # Git 子模块：UI 框架库
 ```
 
 ## 构建与运行
 
-### 依赖
+### 环境准备
 
-- Qt 6（Core, Gui, Widgets, Quick, Qml, QuickControls2）
-- OpenUSD（usd, usdGeom, sdf, tf, vt, gf）
-- CMake ≥ 3.16
-- C++17 编译器
+项目使用 [Pixi](https://pixi.sh) 管理开发环境（Python 3.11 + Qt6 6.8.3 + PySide6 6.8.3 共享同一份 Qt 库）。
+
+```bash
+# 安装 pixi（如未安装）
+curl -fsSL https://pixi.sh/install.sh | bash
+
+# 初始化子模块
+git submodule update --init --recursive
+
+# 安装环境依赖
+pixi install
+```
 
 ### 构建
 
 ```bash
-# 初始化子模块
-git submodule update --init --recursive
-
-# 构建
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
+# 传入 OpenUSD 安装目录
+pixi run python build.py <pxr_install_dir>
 ```
 
 ### 运行
 
 ```bash
-./build/apptest_qmlcmp
+./build/bin/usdSim
 ```
 
 应用启动后会在端口 **37521** 上开启 Inspector Server（可通过 `QML_INSPECTOR_PORT` 环境变量修改）。

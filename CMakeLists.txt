@@ -13,7 +13,8 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Core)
 # ---- Find OpenUSD ----
 find_package(pxr REQUIRED usd stage usdGeom usdLux sdf tf vt gf ar boost python)
 include_directories( "${PXR_INCLUDE_DIRS}"
-                     "$ENV{CONDA_PREFIX}/include/python3.11")
+                     "$ENV{CONDA_PREFIX}/include/python3.11"
+                     "${CMAKE_SOURCE_DIR}/src")
 set(OPENUSD_links    $ENV{CONDA_PREFIX}/lib/libpython3.11.so)
 
 add_subdirectory(third_party/playqmlright)
@@ -22,35 +23,50 @@ add_subdirectory(third_party/prism_all)
 message("${PXR_INCLUDE_DIRS}")
 
 qt_add_executable(usdSim
-    main.cpp
-    PrimInfo.h
-    AttrInfo.h
-    UndoStack.h
-    UndoStack.cpp
-    UndoCommands.h
-    UndoCommands.cpp
-    UsdDocument.h
-    UsdDocument.cpp
-    UsdViewportItem.h
-    UsdViewportItem.cpp
+    src/main.cpp
+    src/PrimInfo.h
+    src/AttrInfo.h
+    src/UndoStack.h
+    src/UndoStack.cpp
+    src/UndoCommands.h
+    src/UndoCommands.cpp
+    src/UsdDocument.h
+    src/UsdDocument.cpp
+    src/UsdViewportItem.h
+    src/UsdViewportItem.cpp
 )
 
 
-set_source_files_properties(AppStyle.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+# Strip src/qml/ prefix so resource paths stay qrc:/usdSim/main.qml etc.
+set_source_files_properties(src/qml/main.qml              PROPERTIES QT_RESOURCE_ALIAS main.qml)
+set_source_files_properties(src/qml/PrimTreePanel.qml      PROPERTIES QT_RESOURCE_ALIAS PrimTreePanel.qml)
+set_source_files_properties(src/qml/ViewportPanel.qml      PROPERTIES QT_RESOURCE_ALIAS ViewportPanel.qml)
+set_source_files_properties(src/qml/AttributePanel.qml     PROPERTIES QT_RESOURCE_ALIAS AttributePanel.qml)
+set_source_files_properties(src/qml/HistoryPanel.qml       PROPERTIES QT_RESOURCE_ALIAS HistoryPanel.qml)
+set_source_files_properties(src/qml/AppStyle.qml           PROPERTIES QT_RESOURCE_ALIAS AppStyle.qml QT_QML_SINGLETON_TYPE TRUE)
+set_source_files_properties(src/qml/PrimContextMenu.qml    PROPERTIES QT_RESOURCE_ALIAS PrimContextMenu.qml)
+set_source_files_properties(src/qml/AddAttributeDialog.qml PROPERTIES QT_RESOURCE_ALIAS AddAttributeDialog.qml)
+set_source_files_properties(src/qml/EditSchemaDialog.qml   PROPERTIES QT_RESOURCE_ALIAS EditSchemaDialog.qml)
+set_source_files_properties(src/icons/eye-solid.svg        PROPERTIES QT_RESOURCE_ALIAS icons/eye-solid.svg)
+set_source_files_properties(src/icons/eye-slash-solid.svg  PROPERTIES QT_RESOURCE_ALIAS icons/eye-slash-solid.svg)
 
 qt_add_qml_module(usdSim
     URI usdSim
     VERSION 1.0
-    QML_FILES main.qml PrimTreePanel.qml ViewportPanel.qml AttributePanel.qml HistoryPanel.qml
-              AppStyle.qml PrimContextMenu.qml AddAttributeDialog.qml EditSchemaDialog.qml
-    RESOURCES icons/eye-solid.svg icons/eye-slash-solid.svg
+    QML_FILES src/qml/main.qml src/qml/PrimTreePanel.qml src/qml/ViewportPanel.qml src/qml/AttributePanel.qml src/qml/HistoryPanel.qml
+              src/qml/AppStyle.qml src/qml/PrimContextMenu.qml src/qml/AddAttributeDialog.qml src/qml/EditSchemaDialog.qml
+    RESOURCES src/icons/eye-solid.svg src/icons/eye-slash-solid.svg
 )
 
+# Strip src/ prefix so shaders stay at :/shaders/viewport.*.qsb
 qt_add_shaders(usdSim "viewport_shaders"
     PREFIX "/"
     FILES
-        shaders/viewport.vert
-        shaders/viewport.frag
+        src/shaders/viewport.vert
+        src/shaders/viewport.frag
+    OUTPUTS
+        shaders/viewport.vert.qsb
+        shaders/viewport.frag.qsb
 )
 
 set_target_properties(usdSim PROPERTIES

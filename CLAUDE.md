@@ -81,37 +81,55 @@ Common options:
 ## Code Architecture
 
 ```
-main.cpp
-  └── QQmlApplicationEngine loads main.qml from qrc:/test_qmlcmp/
-  └── InspectorServer starts TCP listener on port 37521 (or QML_INSPECTOR_PORT env)
+src/
+  main.cpp          ← QQmlApplicationEngine loads main.qml from qrc:/usdSim/
+  UsdDocument.h/cpp ← InspectorServer starts TCP listener on port 37521 (or QML_INSPECTOR_PORT env)
+  UsdViewportItem.h/cpp
+  UndoStack.h/cpp
+  UndoCommands.h/cpp
+  PrimInfo.h
+  AttrInfo.h
+  qml/              ← QML UI files
+  shaders/           ← GLSL vertex/fragment shaders
+  icons/             ← SVG icon resources
 
-main.qml – Empty window placeholder (520x660 logical pixels)
+python/              ← Placeholder for future Python code
 
 CMakeLists.txt
-  ├── Links to playqmlright submodule
-  ├── Qt6 Quick application: apptest_qmlcmp
-  └── Dependencies: Qt6::Quick, qmlinspector
+  ├── Links to playqmlright and prism_all submodules
+  ├── Qt6 Quick application: usdSim
+  ├── Dependencies: Qt6::Quick, Qt6::QuickControls2, Qt6::Gui, qmlinspector, prism, OpenUSD (pxr)
+  └── Finds OpenUSD via CMAKE_PREFIX_PATH (passed to build.py)
+
+build.py
+  └── Python build script, accepts <pxr_install_dir> as argument
+
+pixi.toml
+  └── Conda-forge environment: Python 3.11, Qt6 6.8.3, PySide6 6.8.3 (shared Qt), OpenGL dev libs
 ```
 
 ## Build & Run
 
 ```bash
-# From repository root (assuming submodules initialized)
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
+# Install pixi environment (first time)
+pixi install
+
+# Build (pass OpenUSD install directory)
+pixi run python build.py /home/cnf2025581067/source/installed
 
 # Run the application
-./build/apptest_qmlcmp.app/Contents/MacOS/apptest_qmlcmp
+./build/bin/usdSim
 ```
 
 The app will expose an inspector server on port 37521 (or from `QML_INSPECTOR_PORT` env var).
 
 ## Submodule Structure
 
-- `playqmlright/` – Git submodule containing:
+- `third_party/playqmlright/` – Git submodule containing:
   - `qmlinspector/` – C++ library with InspectorServer for TCP JSON-RPC UI control
   - `playqmlright/playqmlright/` – Python MCP server (FastMCP)
   - `qmlapp/` – Example QML app
+- `third_party/prism_all/` – Git submodule containing prism framework (container, qt_core, qt_modular, qt_ui)
 
 ## Usage Pattern
 
