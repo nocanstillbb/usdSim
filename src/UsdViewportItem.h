@@ -107,6 +107,7 @@ public:
     QMatrix4x4 viewMatrix() const { return m_view; }
     QMatrix4x4 projMatrix() const { return m_proj; }
     QSet<int> selectedMeshes() const { return m_selectedMeshes; }
+    float unitScale() const { return m_unitScale; }
 
 signals:
     void documentChanged();
