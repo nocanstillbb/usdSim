@@ -2,9 +2,8 @@
 .qtcreator/
 build/
 node_modules/
+package.json
 package-lock.json
-**/*.usd
-!xarm6_with_gripper.usd
 **/*.zip
 **/vcpkg_installed
 pixi.lock
