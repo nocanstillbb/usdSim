@@ -80,7 +80,7 @@ public:
         auto root = std::make_shared<NodeProxy>();
         if (stage) {
             std::map<std::string, std::shared_ptr<NodeProxy>> nodeMap;
-            for (const UsdPrim &prim : stage->Traverse()) {
+            for (const UsdPrim &prim : stage->Traverse(UsdTraverseInstanceProxies())) {
                 auto info = std::make_shared<PrimInfo>();
                 info->name     = prim.GetName().GetString();
                 info->path     = prim.GetPath().GetString();
@@ -336,7 +336,7 @@ void UsdDocument::refreshPrimPaths()
     m_impl->primModel->removeAllItemsNotNotify();
 
     if (m_impl->stage) {
-        for (const UsdPrim &prim : m_impl->stage->Traverse()) {
+        for (const UsdPrim &prim : m_impl->stage->Traverse(UsdTraverseInstanceProxies())) {
             QString path = QString::fromStdString(prim.GetPath().GetString());
             m_primPaths << path;
 
@@ -365,7 +365,7 @@ void UsdDocument::refreshPrimList()
     m_impl->primModel->removeAllItemsNotNotify();
 
     if (m_impl->stage) {
-        for (const UsdPrim &prim : m_impl->stage->Traverse()) {
+        for (const UsdPrim &prim : m_impl->stage->Traverse(UsdTraverseInstanceProxies())) {
             QString path = QString::fromStdString(prim.GetPath().GetString());
             m_primPaths << path;
 

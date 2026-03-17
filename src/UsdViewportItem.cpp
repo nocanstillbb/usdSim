@@ -119,6 +119,8 @@ private:
     QVector<GizmoMeshData> m_gridPending;
     bool m_gridRebuild = false;
     bool m_showGrid = false;
+
+    float m_unitScale = 1.f;
 };
 
 // ================================================================
@@ -789,9 +791,12 @@ void UsdViewportItem::buildGridMeshes()
     m_gridMeshes.clear();
     m_gridMeshes.resize(4); // 0=small, 1=large, 2=axis-X/Y, 3=axis-Z/Y
 
-    const float extent = 1000.f; // ±1000 units (±10m)
-    const int smallStep = 10;    // small grid every 10cm
-    const int largeStep = 100;   // large grid every 1m
+    // Scale grid to scene units: base is ±10m in internal units (cm)
+    // For m_unitScale=1 (cm scenes): extent=1000, step=10/100
+    // For m_unitScale=100 (m scenes): extent=100000, step=1000/10000
+    const float extent = 1000.f * qMax(1.f, m_unitScale);
+    const int smallStep = qMax(1, int(10.f * m_unitScale));    // small grid
+    const int largeStep = qMax(10, int(100.f * m_unitScale));  // large grid
     const int stride = 6;
 
     auto addLine = [&](GizmoMeshData &gm, float x0, float y0, float z0,
@@ -1123,13 +1128,14 @@ void UsdViewportItem::buildMeshes()
     bool oldZUp = m_zUp;
     m_zUp = (UsdGeomGetStageUpAxis(stage) == UsdGeomTokens->z);
 
-    // Rebuild grid if up-axis changed
-    if (m_showGrid && m_zUp != oldZUp)
-        buildGridMeshes();
-
     // Unit scale: convert stage units to centimeters
     double metersPerUnit = UsdGeomGetStageMetersPerUnit(stage);
+    float oldUnitScale = m_unitScale;
     m_unitScale = float(metersPerUnit / 0.01);
+
+    // Rebuild grid if up-axis or unit scale changed
+    if (m_showGrid && (m_zUp != oldZUp || m_unitScale != oldUnitScale))
+        buildGridMeshes();
 
     // Derive unit label from metersPerUnit
     auto unitLabel = [](double mpu) -> QString {
@@ -1162,7 +1168,7 @@ void UsdViewportItem::buildMeshes()
     UsdGeomXformCache xfCache;
 
     int meshColorIndex = 0;
-    for (const UsdPrim &prim : stage->Traverse()) {
+    for (const UsdPrim &prim : stage->Traverse(UsdTraverseInstanceProxies())) {
         // Skip prims whose computed visibility is "invisible"
         UsdGeomImageable img(prim);
         if (img && img.ComputeVisibility() == UsdGeomTokens->invisible)
@@ -1377,8 +1383,8 @@ void UsdViewportItem::updateCamera()
     const float aspect = (width() > 0 && height() > 0)
                          ? float(width()) / float(height()) : 1.f;
     m_proj.setToIdentity();
-    float nearP = qMax(0.01f, m_dist * 0.001f);
-    float farP  = qMax(1000.f, m_dist * 20.f);
+    float nearP = qMax(0.001f, m_dist * 0.0005f);
+    float farP  = qMax(1000.f, m_dist * 50.f);
     m_proj.perspective(45.f, aspect, nearP, farP);
 
     updateOrientLabels();
@@ -2403,6 +2409,7 @@ void UsdViewportRenderer::synchronize(QQuickRhiItem *item)
     m_view = vp->viewMatrix();
     m_proj = vp->projMatrix();
     m_selectedIndices = vp->selectedMeshes();
+    m_unitScale = vp->unitScale();
     if (vp->meshDirty()) {
         m_pending = vp->meshes();
         vp->clearMeshDirty();
@@ -2696,7 +2703,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             wub.color[2] = 0.f; wub.color[3] = 0.f;  // a=0 → flat color mode
             // lightDir.xyz = centroid (model space), lightDir.w = push amount
             wub.lightDir[0] = m.centroid.x(); wub.lightDir[1] = m.centroid.y();
-            wub.lightDir[2] = m.centroid.z(); wub.lightDir[3] = 0.004f;
+            wub.lightDir[2] = m.centroid.z(); wub.lightDir[3] = 0.008f;
             upd->updateDynamicBuffer(m.wireUbuf, 0, sizeof(UBuf), &wub);
         }
     }
