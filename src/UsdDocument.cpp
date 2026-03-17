@@ -26,6 +26,7 @@
 #include <pxr/base/tf/token.h>
 #include <pxr/usd/usdGeom/mesh.h>
 #include <pxr/usd/usdGeom/xformable.h>
+#include <pxr/usd/usdUtils/stageCache.h>
 
 #include <QQmlEngine>
 #include <map>
@@ -415,6 +416,48 @@ bool UsdDocument::open(const QString &path)
     return true;
 }
 
+bool UsdDocument::openFromStageCache(long cacheId)
+{
+    auto &cache = UsdUtilsStageCache::Get();
+    auto stage = cache.Find(UsdStageCache::Id::FromLongInt(cacheId));
+    if (!stage) {
+        setError(QString("StageCache: ID %1 not found").arg(cacheId));
+        return false;
+    }
+
+    m_impl->stage = stage;
+    m_filePath = QString::fromStdString(stage->GetRootLayer()->GetIdentifier());
+    m_isOpen = true;
+    m_errorString.clear();
+    m_undoStack->clear();
+
+    emit filePathChanged();
+    emit isOpenChanged();
+    emit errorStringChanged();
+    refreshPrimPaths();
+    return true;
+}
+
+long UsdDocument::insertToStageCache()
+{
+    if (!m_impl->stage) {
+        setError("No stage to insert into cache");
+        return -1;
+    }
+    auto &cache = UsdUtilsStageCache::Get();
+    auto id = cache.Insert(m_impl->stage);
+    return id.ToLongInt();
+}
+
+void UsdDocument::notifyStageModified(const QStringList &modifiedPrimPaths)
+{
+    // Only emit stageModified to rebuild meshes in the viewport.
+    // Do NOT call refreshPrimPaths() here — that resets the tree model
+    // and collapses the TreeView.  Use refreshPrimPaths() only when
+    // the prim hierarchy itself changes (add/remove prims).
+    emit stageModified(modifiedPrimPaths);
+}
+
 bool UsdDocument::save()
 {
     if (!m_impl->stage) { setError("没有打开的文件"); return false; }
@@ -586,7 +629,7 @@ bool UsdDocument::setAttributeInternal(const QString &primPath,
         // Sync tree eye icon when visibility attribute changes
         if (attrName == QStringLiteral("visibility"))
             m_impl->primTreeModel->updateVisibility(primPath, m_impl->stage);
-        emit stageModified();
+        emit stageModified({});
     }
     return ok;
 }
@@ -625,7 +668,7 @@ bool UsdDocument::setAttributeMultiInternal(const QStringList &primPaths,
         if (setAttrFromString(attr, value))
             anyOk = true;
     }
-    if (anyOk) emit stageModified();
+    if (anyOk) emit stageModified({});
     return anyOk;
 }
 
@@ -755,7 +798,7 @@ bool UsdDocument::addPrimInternal(const QString &parentPath,
 
     m_impl->primTreeModel->insertPrimNode(newPath.GetString(), m_impl->stage);
     refreshPrimList();
-    emit stageModified();
+    emit stageModified({});
     return true;
 }
 
@@ -777,7 +820,7 @@ bool UsdDocument::removePrimInternal(const QString &primPath)
     if (ok) {
         m_impl->primTreeModel->removePrimNode(primPath);
         refreshPrimList();
-        emit stageModified();
+        emit stageModified({});
     }
     return ok;
 }
@@ -871,7 +914,7 @@ bool UsdDocument::setPrimVisibilityInternal(const QString &primPath, bool visibl
     // Update tree: this node + all descendants (inherited visibility propagates)
     m_impl->primTreeModel->updateVisibility(primPath, m_impl->stage);
 
-    emit stageModified();
+    emit stageModified({});
     return true;
 }
 
@@ -1061,7 +1104,7 @@ bool UsdDocument::addAttributeInternal(const QString &primPath,
     if (!defaultVal.IsEmpty())
         attr.Set(defaultVal);
 
-    emit stageModified();
+    emit stageModified({});
     return true;
 }
 
@@ -1148,7 +1191,7 @@ bool UsdDocument::applyApiSchemaInternal(const QString &primPath, const QString 
         }
     }
 
-    emit stageModified();
+    emit stageModified({});
     return true;
 }
 
@@ -1191,7 +1234,7 @@ bool UsdDocument::removeApiSchemaInternal(const QString &primPath, const QString
         prim.RemoveProperty(TfToken(name));
     }
 
-    emit stageModified();
+    emit stageModified({});
     return ok;
 }
 
@@ -1234,6 +1277,6 @@ bool UsdDocument::removeAttributeInternal(const QString &primPath, const QString
     if (!prim.IsValid()) return false;
 
     bool ok = prim.RemoveProperty(TfToken(attrName.toStdString()));
-    if (ok) emit stageModified();
+    if (ok) emit stageModified({});
     return ok;
 }

@@ -17,9 +17,14 @@ libglx-devel = "*"
 libegl-devel = "*"
 xorg-libx11 = "*"
 xorg-libxext = "*"
+pybind11 = "*"
 
 [tasks.build]
 cmd = "python build.py {{ pxr_dir }}"
 args = ["pxr_dir"]
+
+[tasks.py-example]
+cmd = "python build/usdsim_env.py {{ script }}"
+args = ["script"]
 
 

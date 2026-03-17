@@ -13,7 +13,24 @@ ApplicationWindow {
     color: "black"
 
     // ── 数据模型 ──────────────────────────────────────────────
-    UsdDocument { id: doc }
+    UsdDocument {
+        id: doc
+        onStageModified: function(modifiedPrimPaths) {
+            // Empty list means unknown — always refresh.
+            // Otherwise only refresh if a selected prim was modified.
+            if (modifiedPrimPaths.length === 0) {
+                attrPanel.refreshValues()
+                return
+            }
+            let sel = root.selectedPrimPaths
+            for (let i = 0; i < sel.length; ++i) {
+                if (modifiedPrimPaths.indexOf(sel[i]) >= 0) {
+                    attrPanel.refreshValues()
+                    return
+                }
+            }
+        }
+    }
 
     property string selectedPrimPath: ""
     property var selectedPrimPaths: []

@@ -70,7 +70,7 @@ void SetAttributeMultiCommand::undo()
         if (m_oldValues.contains(path))
             m_doc->setAttributeInternal(path, m_attrName, m_oldValues[path]);
     }
-    emit m_doc->stageModified();
+    emit m_doc->stageModified({});
 }
 
 void SetAttributeMultiCommand::redo()
@@ -161,7 +161,7 @@ void RemovePrimCommand::undo()
     }
     m_doc->insertPrimSubtree(m_primPath);
     m_doc->refreshPrimList();
-    emit m_doc->stageModified();
+    emit m_doc->stageModified({});
 }
 
 void RemovePrimCommand::redo()
@@ -189,7 +189,7 @@ void SetPrimActiveCommand::undo()
     for (const Entry &e : m_entries)
         m_doc->setVisibilityRaw(e.primPath, e.oldVisible);
     m_doc->refreshVisibilityTree();
-    emit m_doc->stageModified();
+    emit m_doc->stageModified({});
 }
 
 void SetPrimActiveCommand::redo()
@@ -197,7 +197,7 @@ void SetPrimActiveCommand::redo()
     for (const Entry &e : m_entries)
         m_doc->setVisibilityRaw(e.primPath, e.newVisible);
     m_doc->refreshVisibilityTree();
-    emit m_doc->stageModified();
+    emit m_doc->stageModified({});
 }
 
 QString SetPrimActiveCommand::text() const
@@ -391,14 +391,14 @@ void GizmoTransformCommand::undo()
 {
     for (const Entry &e : m_entries)
         m_doc->setAttributeInternal(e.primPath, e.attrName, e.oldValue);
-    emit m_doc->stageModified();
+    emit m_doc->stageModified({});
 }
 
 void GizmoTransformCommand::redo()
 {
     for (const Entry &e : m_entries)
         m_doc->setAttributeInternal(e.primPath, e.attrName, e.newValue);
-    emit m_doc->stageModified();
+    emit m_doc->stageModified({});
 }
 
 QString GizmoTransformCommand::text() const
