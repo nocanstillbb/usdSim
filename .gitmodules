@@ -1,6 +1,6 @@
 [submodule "playqmlright"]
-	path = playqmlright
+	path = third_party/playqmlright
 	url = https://github.com/nocanstillbb/playqmlright.git
 [submodule "prism_all"]
-	path = prism_all
+	path = third_party/prism_all
 	url = git@github.com:cpp-prism/prism_all.git

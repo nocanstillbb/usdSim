@@ -16,8 +16,8 @@ include_directories( "${PXR_INCLUDE_DIRS}"
                      "$ENV{CONDA_PREFIX}/include/python3.11")
 set(OPENUSD_links    $ENV{CONDA_PREFIX}/lib/libpython3.11.so)
 
-add_subdirectory(playqmlright)
-add_subdirectory(prism_all)
+add_subdirectory(third_party/playqmlright)
+add_subdirectory(third_party/prism_all)
 
 message("111111111")
 message("${PXR_INCLUDE_DIRS}")
