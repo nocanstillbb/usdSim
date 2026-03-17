@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(test_qmlcmp VERSION 0.1 LANGUAGES CXX)
+project(usdSim VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_CXX_STANDARD 17)
@@ -23,7 +23,7 @@ message("111111111")
 message("${PXR_INCLUDE_DIRS}")
 message("22222222")
 
-qt_add_executable(apptest_qmlcmp
+qt_add_executable(usdSim
     main.cpp
     PrimInfo.h
     AttrInfo.h
@@ -40,22 +40,24 @@ qt_add_executable(apptest_qmlcmp
 
 set_source_files_properties(AppStyle.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 
-qt_add_qml_module(apptest_qmlcmp
-    URI test_qmlcmp
+qt_add_qml_module(usdSim
+    URI usdSim
     VERSION 1.0
     QML_FILES main.qml PrimTreePanel.qml ViewportPanel.qml AttributePanel.qml HistoryPanel.qml
               AppStyle.qml PrimContextMenu.qml AddAttributeDialog.qml EditSchemaDialog.qml
     RESOURCES icons/eye-solid.svg icons/eye-slash-solid.svg
 )
 
-qt_add_shaders(apptest_qmlcmp "viewport_shaders"
+qt_add_shaders(usdSim "viewport_shaders"
     PREFIX "/"
     FILES
         shaders/viewport.vert
         shaders/viewport.frag
 )
 
-set_target_properties(apptest_qmlcmp PROPERTIES
+set_target_properties(usdSim PROPERTIES
+    OUTPUT_NAME usdSim
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
     MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
     MACOSX_BUNDLE TRUE
@@ -65,7 +67,7 @@ set_target_properties(apptest_qmlcmp PROPERTIES
 )
 
 
-target_link_libraries(apptest_qmlcmp PRIVATE
+target_link_libraries(usdSim PRIVATE
     qmlinspector
     prism::prism
     prism::qt::core
@@ -88,6 +90,6 @@ target_link_libraries(apptest_qmlcmp PRIVATE
 )
 
 include(GNUInstallDirs)
-install(TARGETS apptest_qmlcmp
+install(TARGETS usdSim
     BUNDLE DESTINATION .
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
