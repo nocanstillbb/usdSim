@@ -278,7 +278,8 @@ static void genCapsule(float radius, float height,
         }
 }
 
-static void genCube(float size, QVector<float> &v, QVector<quint32> &idx)
+static void genCube(float size, QVector<float> &v, QVector<quint32> &idx,
+                    int subdivisions = 8)
 {
     float h = size * 0.5f;
     struct Face { float nx,ny,nz; float p[4][3]; };
@@ -291,12 +292,33 @@ static void genCube(float size, QVector<float> &v, QVector<quint32> &idx)
         { 0,-1, 0, {{-h,-h,-h},{h,-h,-h},{h,-h,h},{-h,-h,h}}}
     };
     v.clear(); idx.clear();
-    quint32 base = 0;
+    const int N = subdivisions;
     for (auto &f : faces) {
-        for (int i = 0; i < 4; i++)
-            v << f.p[i][0] << f.p[i][1] << f.p[i][2] << f.nx << f.ny << f.nz;
-        idx << base << base+1 << base+2 << base << base+2 << base+3;
-        base += 4;
+        quint32 base = quint32(v.size() / 6);
+        // Generate (N+1)x(N+1) grid of vertices per face
+        for (int j = 0; j <= N; ++j) {
+            float tv = float(j) / float(N);
+            for (int i = 0; i <= N; ++i) {
+                float tu = float(i) / float(N);
+                // Bilinear interpolation of face corners: p0,p1,p2,p3
+                float px = (1-tu)*(1-tv)*f.p[0][0] + tu*(1-tv)*f.p[1][0]
+                         + tu*tv*f.p[2][0] + (1-tu)*tv*f.p[3][0];
+                float py = (1-tu)*(1-tv)*f.p[0][1] + tu*(1-tv)*f.p[1][1]
+                         + tu*tv*f.p[2][1] + (1-tu)*tv*f.p[3][1];
+                float pz = (1-tu)*(1-tv)*f.p[0][2] + tu*(1-tv)*f.p[1][2]
+                         + tu*tv*f.p[2][2] + (1-tu)*tv*f.p[3][2];
+                v << px << py << pz << f.nx << f.ny << f.nz;
+            }
+        }
+        // Generate NxN quads (2 triangles each)
+        for (int j = 0; j < N; ++j) {
+            for (int i = 0; i < N; ++i) {
+                quint32 r0 = base + quint32(j * (N + 1) + i);
+                quint32 r1 = base + quint32((j + 1) * (N + 1) + i);
+                idx << r0 << (r0 + 1) << (r1 + 1)
+                    << r0 << (r1 + 1) << r1;
+            }
+        }
     }
 }
 
@@ -2718,7 +2740,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             wub.color[2] = 0.f; wub.color[3] = 0.f;  // a=0 → flat color mode
             // lightDir.xyz = centroid (model space), lightDir.w = push amount
             wub.lightDir[0] = m.centroid.x(); wub.lightDir[1] = m.centroid.y();
-            wub.lightDir[2] = m.centroid.z(); wub.lightDir[3] = 0.008f;
+            wub.lightDir[2] = m.centroid.z(); wub.lightDir[3] = 0.004f;
             upd->updateDynamicBuffer(m.wireUbuf, 0, sizeof(UBuf), &wub);
         }
     }
