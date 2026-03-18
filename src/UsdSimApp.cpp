@@ -1,4 +1,5 @@
 #include "UsdSimApp.h"
+#include <QApplication>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
@@ -36,7 +37,7 @@ void UsdSimApp::init(int argc, char *argv[])
         m_argv[i] = m_argStorage[i].data();
     m_argv[argc] = nullptr;
 
-    m_app = new QGuiApplication(m_argc, m_argv.get());
+    m_app = new QApplication(m_argc, m_argv.get());
     QQuickStyle::setStyle("Basic");
 
     m_engine = new QQmlApplicationEngine();

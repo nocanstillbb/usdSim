@@ -1032,6 +1032,29 @@ QModelIndex UsdDocument::findPrimModelIndex(const QString &path) const
     return m_impl->primTreeModel->indexForPath(path);
 }
 
+// ---- Native file dialogs ----
+#include <QFileDialog>
+
+QString UsdDocument::showOpenFileDialog()
+{
+    QString path = QFileDialog::getOpenFileName(
+        nullptr,
+        QStringLiteral("打开 USD 文件"),
+        QString(),
+        QStringLiteral("USD 文件 (*.usd *.usda *.usdc *.usdz);;所有文件 (*)"));
+    return path;
+}
+
+QString UsdDocument::showSaveFileDialog()
+{
+    QString path = QFileDialog::getSaveFileName(
+        nullptr,
+        QStringLiteral("另存为"),
+        QString(),
+        QStringLiteral("USD 文件 (*.usd *.usda *.usdc);;所有文件 (*)"));
+    return path;
+}
+
 // ---- Undo / Redo ----
 void UsdDocument::undo()
 {

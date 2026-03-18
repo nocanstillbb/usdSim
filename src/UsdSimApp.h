@@ -2,7 +2,7 @@
 #include <QObject>
 #include <memory>
 
-class QGuiApplication;
+class QApplication;
 class QQmlApplicationEngine;
 class InspectorServer;
 class UsdDocument;
@@ -24,7 +24,7 @@ public:
     void processEvents();
 
 private:
-    QGuiApplication *m_app = nullptr;
+    QApplication *m_app = nullptr;
     QQmlApplicationEngine *m_engine = nullptr;
     InspectorServer *m_inspector = nullptr;
 

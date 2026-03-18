@@ -103,6 +103,10 @@ public:
     // 查找 prim 在树模型中的 QModelIndex（用于 TreeView 展开+选中）
     Q_INVOKABLE QModelIndex findPrimModelIndex(const QString &path) const;
 
+    // Native file dialogs via QFileDialog
+    Q_INVOKABLE QString showOpenFileDialog();
+    Q_INVOKABLE QString showSaveFileDialog();
+
     // 内部使用：返回 USD Stage 指针（调用方须包含 USD 头文件再强转）
     void *stagePtr() const;
 

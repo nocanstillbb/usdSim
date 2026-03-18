@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Dialogs
 import UsdBrowser 1.0
 
 ApplicationWindow {
@@ -105,10 +104,9 @@ ApplicationWindow {
 
             Repeater {
                 model: [
-                    { label: "打开",   enabled: true,        action: function(){ openDialog.open() } },
-                    { label: "测试文件", enabled: true,      action: function(){ doc.open("assets/usd/test_scene.usda") } },
+                    { label: "打开",   enabled: true,        action: function(){ root.openFileAction() } },
                     { label: "保存",   enabled: doc.isOpen,  action: function(){ doc.save(); statusText.text = "已保存" } },
-                    { label: "另存为", enabled: doc.isOpen,  action: function(){ saveAsDialog.open() } },
+                    { label: "另存为", enabled: doc.isOpen,  action: function(){ root.saveAsAction() } },
                     { label: "关闭",   enabled: doc.isOpen,  action: function(){
                         doc.close(); doc.clearAttributes()
                         root.selectedPrimPath = ""; root.selectedPrimPaths = []
@@ -281,25 +279,17 @@ ApplicationWindow {
         }
     }
 
-    // ── 文件对话框 ────────────────────────────────────────────
-    FileDialog {
-        id: openDialog
-        title: "打开 USD 文件"
-        nameFilters: ["USD 文件 (*.usd *.usda *.usdc *.usdz)", "所有文件 (*)"]
-        onAccepted: {
-            let path = selectedFile.toString().replace("file://", "")
+    // ── 文件对话框（通过 C++ QFileDialog，始终使用原生对话框）────
+    function openFileAction() {
+        let path = doc.showOpenFileDialog()
+        if (path !== "") {
             let ok = doc.open(path)
             statusText.text = ok ? "已打开: " + path : "失败: " + doc.errorString
         }
     }
-
-    FileDialog {
-        id: saveAsDialog
-        title: "另存为"
-        fileMode: FileDialog.SaveFile
-        nameFilters: ["USD 文件 (*.usd *.usda *.usdc)", "所有文件 (*)"]
-        onAccepted: {
-            let path = selectedFile.toString().replace("file://", "")
+    function saveAsAction() {
+        let path = doc.showSaveFileDialog()
+        if (path !== "") {
             let ok = doc.saveAs(path)
             statusText.text = ok ? "已保存: " + path : "失败"
         }
