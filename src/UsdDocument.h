@@ -15,6 +15,7 @@ class UsdDocument : public QObject
     Q_PROPERTY(QStringList primPaths READ primPaths NOTIFY primPathsChanged)
     Q_PROPERTY(QObject* primModel READ primModel NOTIFY primPathsChanged)
     Q_PROPERTY(QObject* primTreeModel READ primTreeModel NOTIFY primPathsChanged)
+    Q_PROPERTY(QObject* filteredPrimTreeModel READ filteredPrimTreeModel NOTIFY primPathsChanged)
     Q_PROPERTY(QString filePath READ filePath NOTIFY filePathChanged)
     Q_PROPERTY(bool isOpen READ isOpen NOTIFY isOpenChanged)
     Q_PROPERTY(QString errorString READ errorString NOTIFY errorStringChanged)
@@ -28,6 +29,7 @@ public:
     QStringList primPaths() const { return m_primPaths; }
     QObject *primModel() const;
     QObject *primTreeModel() const;
+    QObject *filteredPrimTreeModel() const;
     QString filePath() const { return m_filePath; }
     bool isOpen() const { return m_isOpen; }
     QString errorString() const { return m_errorString; }
@@ -102,6 +104,9 @@ public:
 
     // 查找 prim 在树模型中的 QModelIndex（用于 TreeView 展开+选中）
     Q_INVOKABLE QModelIndex findPrimModelIndex(const QString &path) const;
+
+    // 设置 prim 树过滤器（按名称大小写不敏感子串匹配，空字符串清除过滤）
+    Q_INVOKABLE void setPrimTreeFilter(const QString &filter);
 
     // Native file dialogs via QFileDialog
     Q_INVOKABLE QString showOpenFileDialog();

@@ -29,6 +29,7 @@
 #include <pxr/usd/usdUtils/stageCache.h>
 
 #include <QQmlEngine>
+#include <QSortFilterProxyModel>
 #include <map>
 #include <set>
 
@@ -185,16 +186,55 @@ private:
     }
 };
 
+// ---- PrimTreeFilterModel (QSortFilterProxyModel for tree filtering) ----
+class PrimTreeFilterModel : public QSortFilterProxyModel {
+public:
+    explicit PrimTreeFilterModel(QObject *parent = nullptr)
+        : QSortFilterProxyModel(parent) {
+        setRecursiveFilteringEnabled(true);
+    }
+
+    void setFilter(const QString &filter) {
+        m_filter = filter.toLower();
+        invalidateFilter();
+    }
+
+    void setSourceModel(QAbstractItemModel *model) override {
+        QSortFilterProxyModel::setSourceModel(model);
+        m_nameRole = -1;
+        if (model) {
+            const auto roles = model->roleNames();
+            for (auto it = roles.begin(); it != roles.end(); ++it) {
+                if (it.value() == "name") { m_nameRole = it.key(); break; }
+            }
+        }
+    }
+
+protected:
+    bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override {
+        if (m_filter.isEmpty()) return true;
+        if (m_nameRole < 0) return true;
+        QModelIndex idx = sourceModel()->index(sourceRow, 0, sourceParent);
+        QString name = sourceModel()->data(idx, m_nameRole).toString();
+        return name.toLower().contains(m_filter);
+    }
+
+private:
+    QString m_filter;
+    int m_nameRole = -1;
+};
+
 // ---- 内部实现结构 ----
 using PrimModel = prism::qt::core::prismModelListProxy<PrimInfo>;
 using AttrModel = prism::qt::core::prismModelListProxy<AttrInfo>;
 
 struct UsdDocument::Impl {
-    UsdStageRefPtr  stage;
-    PrimModel      *primModel     = nullptr;
-    PrimTreeModel  *primTreeModel = nullptr;
-    AttrModel      *attrModel     = nullptr;
-    ~Impl() { delete primModel; delete primTreeModel; delete attrModel; }
+    UsdStageRefPtr       stage;
+    PrimModel           *primModel       = nullptr;
+    PrimTreeModel       *primTreeModel   = nullptr;
+    PrimTreeFilterModel *filterModel     = nullptr;
+    AttrModel           *attrModel       = nullptr;
+    ~Impl() { delete primModel; delete primTreeModel; delete filterModel; delete attrModel; }
 };
 
 // ---- 工具函数：VtValue → QString ----
@@ -300,6 +340,8 @@ UsdDocument::UsdDocument(QObject *parent)
 {
     m_impl->primModel     = new PrimModel();
     m_impl->primTreeModel = new PrimTreeModel();
+    m_impl->filterModel   = new PrimTreeFilterModel();
+    m_impl->filterModel->setSourceModel(m_impl->primTreeModel);
     m_impl->attrModel     = new AttrModel();
     m_undoStack = new UndoStack(this);
 }
@@ -312,6 +354,11 @@ QObject *UsdDocument::primModel() const
 QObject *UsdDocument::primTreeModel() const
 {
     return m_impl->primTreeModel;
+}
+
+QObject *UsdDocument::filteredPrimTreeModel() const
+{
+    return m_impl->filterModel;
 }
 
 QObject *UsdDocument::attrModel() const
@@ -1028,8 +1075,15 @@ void *UsdDocument::stagePtr() const
 
 QModelIndex UsdDocument::findPrimModelIndex(const QString &path) const
 {
-    if (!m_impl->primTreeModel) return {};
-    return m_impl->primTreeModel->indexForPath(path);
+    if (!m_impl->primTreeModel || !m_impl->filterModel) return {};
+    QModelIndex sourceIdx = m_impl->primTreeModel->indexForPath(path);
+    return m_impl->filterModel->mapFromSource(sourceIdx);
+}
+
+void UsdDocument::setPrimTreeFilter(const QString &filter)
+{
+    if (m_impl->filterModel)
+        m_impl->filterModel->setFilter(filter.trimmed());
 }
 
 // ---- Native file dialogs ----
