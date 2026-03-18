@@ -1174,6 +1174,14 @@ void UsdViewportItem::buildMeshes()
         if (img && img.ComputeVisibility() == UsdGeomTokens->invisible)
             continue;
 
+        // Skip prims with purpose != "default" (e.g. "guide" collision shapes, "proxy", "render")
+        if (img) {
+            TfToken purpose;
+            img.GetPurposeAttr().Get(&purpose);
+            if (!purpose.IsEmpty() && purpose != UsdGeomTokens->default_)
+                continue;
+        }
+
         const TfToken type = prim.GetTypeName();
 
         QVector<float>   verts;
@@ -2210,7 +2218,7 @@ int UsdViewportItem::pickMesh(const QPointF &pos) const
     QVector3D rayOrig = nearP;
     QVector3D rayDir  = (farP - nearP).normalized();
 
-    float bestT = FLT_MAX;
+    float bestWorldT = FLT_MAX;
     int   bestIdx = -1;
 
     for (int mi = 0; mi < m_meshes.size(); ++mi) {
@@ -2242,9 +2250,15 @@ int UsdViewportItem::pickMesh(const QPointF &pos) const
             float v = f * QVector3D::dotProduct(dir, q);
             if (v < 0.f || u + v > 1.f) continue;
             float t = f * QVector3D::dotProduct(e2, q);
-            if (t > 1e-5f && t < bestT) {
-                bestT = t;
-                bestIdx = mi;
+            if (t > 1e-5f) {
+                // Convert hit point back to world space to compare distances consistently
+                QVector3D localHit = orig + dir * t;
+                QVector3D worldHit = md.transform.map(localHit);
+                float worldT = QVector3D::dotProduct(worldHit - rayOrig, rayDir);
+                if (worldT > 1e-5f && worldT < bestWorldT) {
+                    bestWorldT = worldT;
+                    bestIdx = mi;
+                }
             }
         }
     }
