@@ -2148,7 +2148,8 @@ void UsdViewportItem::selectPrimPath(const QString &path)
     int lastIdx = -1;
     if (!path.isEmpty()) {
         for (int i = 0; i < m_meshes.size(); ++i) {
-            if (m_meshes[i].primPath.startsWith(path)) {
+            if (m_meshes[i].primPath == path
+                || m_meshes[i].primPath.startsWith(path + '/')) {
                 newSel.insert(i);
                 lastIdx = i;
             }
@@ -2171,7 +2172,8 @@ void UsdViewportItem::selectPrimPaths(const QStringList &paths)
     for (const QString &path : paths) {
         if (path.isEmpty()) continue;
         for (int i = 0; i < m_meshes.size(); ++i) {
-            if (m_meshes[i].primPath.startsWith(path)) {
+            if (m_meshes[i].primPath == path
+                || m_meshes[i].primPath.startsWith(path + '/')) {
                 newSel.insert(i);
                 lastMatchedIdx = i;
             }
@@ -2194,7 +2196,8 @@ void UsdViewportItem::togglePrimPath(const QString &path)
     // Collect all mesh indices matching this path (or children)
     QSet<int> matched;
     for (int i = 0; i < m_meshes.size(); ++i) {
-        if (m_meshes[i].primPath.startsWith(path))
+        if (m_meshes[i].primPath == path
+            || m_meshes[i].primPath.startsWith(path + '/'))
             matched.insert(i);
     }
     if (matched.isEmpty()) return;
