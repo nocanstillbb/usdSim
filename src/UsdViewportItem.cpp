@@ -1391,8 +1391,9 @@ void UsdViewportItem::updateCamera()
     const float aspect = (width() > 0 && height() > 0)
                          ? float(width()) / float(height()) : 1.f;
     m_proj.setToIdentity();
+    float gridExtent = 1000.f * qMax(1.f, m_unitScale);
     float nearP = qMax(0.001f, m_dist * 0.0005f);
-    float farP  = qMax(1000.f, m_dist * 50.f);
+    float farP  = qMax(gridExtent * 3.f, m_dist * 50.f);
     m_proj.perspective(45.f, aspect, nearP, farP);
 
     updateOrientLabels();
