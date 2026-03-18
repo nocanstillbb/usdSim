@@ -21,12 +21,20 @@ void main()
     if (push > 0.0) {
         // Outline mode: expand in screen space from projected mesh center
         vec3 meshCenter = ubo.lightDir.xyz;
-        vec4 clipCenter = ubo.mvp * vec4(meshCenter, 1.0);
+        vec3 modelDir = inPos - meshCenter;
 
-        // Screen-space direction from center to this vertex
-        vec2 screenPos    = clipPos.xy / clipPos.w;
-        vec2 screenCenter = clipCenter.xy / clipCenter.w;
-        vec2 dir = screenPos - screenCenter;
+        // Compensate non-uniform scale so push direction isn't distorted
+        // by elongated transforms (e.g. thin poles with scale 0.03 x 8 x 0.03).
+        // Dividing by column lengths removes the scale, then MVP * (dir/scale, 0)
+        // effectively transforms through ViewProj * Rotation (no scale).
+        float sx = length(ubo.modelMat[0].xyz);
+        float sy = length(ubo.modelMat[1].xyz);
+        float sz = length(ubo.modelMat[2].xyz);
+        vec3 compensated = modelDir / vec3(sx, sy, sz);
+
+        // Project compensated direction to clip space (w=0 → direction only)
+        vec4 clipDir = ubo.mvp * vec4(compensated, 0.0);
+        vec2 dir = clipDir.xy;
         float len = length(dir);
         if (len > 0.00001) {
             dir = normalize(dir);
