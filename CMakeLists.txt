@@ -85,6 +85,7 @@ target_link_libraries(usdSimLib PUBLIC
     Qt6::QuickControls2
     Qt6::Gui
     Qt6::GuiPrivate
+    Qt6::Widgets
     ${PXR_usd_LIBRARY}
     ${PXR_stage_LIBRARY}
     ${PXR_usdGeom_LIBRARY}
