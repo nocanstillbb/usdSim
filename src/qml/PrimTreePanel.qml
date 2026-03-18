@@ -15,6 +15,7 @@ Rectangle {
     property bool _internalChange: false
     property real _eyeColWidth: 36
     property real _typeColWidth: 70
+    property bool _isFiltering: false
 
     onSelectedPrimPathsChanged: {
         if (_internalChange) return
@@ -44,6 +45,33 @@ Rectangle {
                 }
             })
         }
+    }
+
+    function _applyFilter(text) {
+        let q = text.trim()
+        _isFiltering = q.length > 0
+        document.setPrimTreeFilter(q)
+        if (_isFiltering) {
+            // Expand all visible nodes so filtered results are shown
+            Qt.callLater(function() { primTree.expandRecursively() })
+        }
+    }
+
+    function _clearFilter() {
+        searchField.text = ""
+        _isFiltering = false
+        document.setPrimTreeFilter("")
+        // Wait for TreeView to finish rebuilding after filter removal,
+        // then expand+select+scroll to the previously selected prim
+        if (selectedPrimPaths.length > 0) {
+            scrollTimer.restart()
+        }
+    }
+
+    Timer {
+        id: scrollTimer
+        interval: 50; repeat: false
+        onTriggered: panel._syncTreeSelection(panel.selectedPrimPaths)
     }
 
     // ── Right-click context menu ──
@@ -171,12 +199,44 @@ Rectangle {
             }
         }
 
+        // ── Search bar ──
+        Item {
+            Layout.fillWidth: true; height: 24
+            Layout.leftMargin: 2; Layout.rightMargin: 2
+
+            TextField {
+                id: searchField
+                anchors.fill: parent
+                placeholderText: "搜索 prim..."
+                placeholderTextColor: "#555555"
+                color: "#cccccc"; font.pixelSize: 11
+                leftPadding: 4; rightPadding: 20; topPadding: 0; bottomPadding: 0
+                background: Rectangle { color: "#1e1e1e"; radius: 3; border.color: searchField.activeFocus ? "#007acc" : "#3a3a3a" }
+                onTextChanged: panel._applyFilter(text)
+                Keys.onEscapePressed: panel._clearFilter()
+            }
+
+            Label {
+                visible: searchField.text.length > 0
+                anchors.right: parent.right; anchors.rightMargin: 4
+                anchors.verticalCenter: parent.verticalCenter
+                text: "\u2715"; color: clearArea.containsMouse ? "#cccccc" : "#888888"; font.pixelSize: 11
+
+                MouseArea {
+                    id: clearArea
+                    anchors.fill: parent; anchors.margins: -4
+                    cursorShape: Qt.PointingHandCursor; hoverEnabled: true
+                    onClicked: panel._clearFilter()
+                }
+            }
+        }
+
         TreeView {
             id: primTree
             Layout.fillWidth: true; Layout.fillHeight: true
             clip: true
             selectionModel: ItemSelectionModel { id: sel }
-            model: panel.document.primTreeModel
+            model: panel.document.filteredPrimTreeModel
             property int hoveredRow: -1
 
             ScrollBar.vertical: ScrollBar {}
