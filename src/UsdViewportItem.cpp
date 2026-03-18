@@ -1087,6 +1087,7 @@ static void computeSmoothNormals(MeshData &md)
 UsdViewportItem::UsdViewportItem(QQuickItem *parent)
     : QQuickRhiItem(parent)
 {
+    setSampleCount(4);
     setAcceptedMouseButtons(Qt::LeftButton | Qt::RightButton | Qt::MiddleButton);
     setAcceptHoverEvents(true);
     buildGizmoMeshes(m_translateGizmoMeshes);
@@ -2590,6 +2591,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         m_pipeline->setVertexInputLayout(il);
         m_pipeline->setShaderResourceBindings(m_meshes[0].srb);
         m_pipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_pipeline->setSampleCount(renderTarget()->sampleCount());
         m_pipeline->create();
 
         // Stencil-write pipeline: render selected mesh to mark stencil=1, no color output
@@ -2623,6 +2625,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         m_stencilPipeline->setVertexInputLayout(il);
         m_stencilPipeline->setShaderResourceBindings(m_meshes[0].wireSrb);
         m_stencilPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_stencilPipeline->setSampleCount(renderTarget()->sampleCount());
         m_stencilPipeline->create();
 
         // Outline pipeline: draw expanded mesh only where stencil != 1
@@ -2652,6 +2655,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         m_wirePipeline->setVertexInputLayout(il);
         m_wirePipeline->setShaderResourceBindings(m_meshes[0].wireSrb);
         m_wirePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_wirePipeline->setSampleCount(renderTarget()->sampleCount());
         m_wirePipeline->create();
     }
 
@@ -2681,6 +2685,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             ? m_rhiGizmo[0].srb : m_rhiOrientAxes[0].srb;
         m_gizmoPipeline->setShaderResourceBindings(srb);
         m_gizmoPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_gizmoPipeline->setSampleCount(renderTarget()->sampleCount());
         m_gizmoPipeline->create();
     }
 
@@ -2709,6 +2714,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         m_gridPipeline->setVertexInputLayout(il);
         m_gridPipeline->setShaderResourceBindings(m_rhiGrid[0].srb);
         m_gridPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_gridPipeline->setSampleCount(renderTarget()->sampleCount());
         m_gridPipeline->create();
     }
 
