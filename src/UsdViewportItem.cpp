@@ -68,6 +68,7 @@ private:
         QMatrix4x4 transform;
         QVector3D  color;
         QVector3D  centroid;
+        bool lineOnly = false;
     };
 
     void destroyMeshes();
@@ -87,6 +88,7 @@ private:
     QRhiGraphicsPipeline *m_wirePipeline   = nullptr;
     QRhiGraphicsPipeline *m_stencilPipeline = nullptr;
     QRhiGraphicsPipeline *m_gizmoPipeline  = nullptr;
+    QRhiGraphicsPipeline *m_lineMeshPipeline = nullptr;
     QShader m_vs, m_fs;
     bool m_initialized = false;
 
@@ -353,6 +355,76 @@ static void genDisk(float radius, QVector<float> &v, QVector<quint32> &idx)
     }
     for (int i = 0; i < segs; i++)
         idx << 0 << i+1 << i+2;
+}
+
+// Line-only gizmo for RectLight (Isaac Sim style):
+// - Square frame in XY plane at Z=0 (the light face)
+// - 5 ray lines going -Z (4 corners + center) — USD emission direction is -Z
+// Indices are line pairs (for GL_LINES topology).
+static void genRectLightGizmo(float size, QVector<float> &v, QVector<quint32> &idx)
+{
+    float hs = size * 0.5f;
+    float rayLen = size * 0.6f;
+    v.clear(); idx.clear();
+
+    auto addVert = [&](float x, float y, float z) -> quint32 {
+        quint32 i = v.size() / 6;
+        v << x << y << z << 0.f << 0.f << -1.f; // normal along -Z (emission dir)
+        return i;
+    };
+
+    // 4 corners of the square face at Z=0 (in XY plane)
+    quint32 c0 = addVert(-hs, -hs, 0);
+    quint32 c1 = addVert( hs, -hs, 0);
+    quint32 c2 = addVert( hs,  hs, 0);
+    quint32 c3 = addVert(-hs,  hs, 0);
+
+    // Square frame edges
+    idx << c0 << c1 << c1 << c2 << c2 << c3 << c3 << c0;
+
+    // 5 ray lines going -Z from face (4 corners + center) — emission direction
+    quint32 r0 = addVert(-hs, -hs, -rayLen);
+    quint32 r1 = addVert( hs, -hs, -rayLen);
+    quint32 r2 = addVert( hs,  hs, -rayLen);
+    quint32 r3 = addVert(-hs,  hs, -rayLen);
+    quint32 rc = addVert(0,    0,   -rayLen);
+    quint32 cc = addVert(0,    0,    0);       // center of face
+    idx << c0 << r0 << c1 << r1 << c2 << r2 << c3 << r3 << cc << rc;
+}
+
+// Line-only gizmo for DiskLight (Isaac Sim style):
+// - Circle in XY plane at Z=0 (the disk face)
+// - 4 ray lines going -Z from cardinal points — USD emission direction is -Z
+// Indices are line pairs (for GL_LINES topology).
+static void genDiskLightGizmo(float radius, QVector<float> &v, QVector<quint32> &idx)
+{
+    const int segs = 36;
+    float rayLen = radius * 1.2f;
+    v.clear(); idx.clear();
+
+    auto addVert = [&](float x, float y, float z) -> quint32 {
+        quint32 i = v.size() / 6;
+        v << x << y << z << 0.f << 0.f << -1.f; // normal along -Z (emission dir)
+        return i;
+    };
+
+    // Circle vertices at Z=0 (in XY plane)
+    QVector<quint32> circleVerts;
+    for (int i = 0; i < segs; i++) {
+        float t = 2.f * float(M_PI) * i / segs;
+        circleVerts << addVert(cosf(t) * radius, sinf(t) * radius, 0.f);
+    }
+    // Circle edges
+    for (int i = 0; i < segs; i++)
+        idx << circleVerts[i] << circleVerts[(i + 1) % segs];
+
+    // 4 ray lines from cardinal points going -Z — emission direction
+    for (int i = 0; i < 4; i++) {
+        int ci = i * (segs / 4);
+        float t = 2.f * float(M_PI) * ci / segs;
+        quint32 rv = addVert(cosf(t) * radius, sinf(t) * radius, -rayLen);
+        idx << circleVerts[ci] << rv;
+    }
 }
 
 static void genHemisphere(float r, QVector<float> &v, QVector<quint32> &idx)
@@ -1215,6 +1287,7 @@ void UsdViewportItem::buildMeshes()
 
         QVector<float>   verts;
         QVector<quint32> indices;
+        bool isLineOnly = false;
 
         if (type == "Sphere") {
             double r = 1.0; UsdGeomSphere(prim).GetRadiusAttr().Get(&r);
@@ -1258,18 +1331,37 @@ void UsdViewportItem::buildMeshes()
             genMesh(UsdGeomMesh(prim), verts, indices);
 
         // ── Light types ──
-        // Light proxy/guide meshes use a fixed visual size (like Houdini/Isaac Sim).
-        // Scale by 1/m_unitScale so proxies appear the same size in any unit system.
-        // Physical light attributes (radius, width, etc.) only affect lighting, not proxy size.
+        // Light gizmo sizes reflect actual USD light attributes (width, height, radius).
         } else if (type == "SphereLight") {
-            float ps = 1.f / m_unitScale;
-            genSphere(0.5f * ps, verts, indices);
+            double r = 0.5;
+            UsdLuxSphereLight(prim).GetRadiusAttr().Get(&r);
+            genSphere(float(r), verts, indices);
         } else if (type == "RectLight") {
-            float ps = 1.f / m_unitScale;
-            genPlane(1.0f * ps, 1.0f * ps, verts, indices);
+            float w = 1.0f, h = 1.0f;
+            UsdLuxRectLight rectLight(prim);
+            rectLight.GetWidthAttr().Get(&w);
+            rectLight.GetHeightAttr().Get(&h);
+            qDebug() << "RectLight" << prim.GetPath().GetText() << "w=" << w << "h=" << h;
+            // Generate unit gizmo then scale: X by width, Y by height, Z by avg
+            genRectLightGizmo(1.0f, verts, indices);
+            {
+                float *d = verts.data();
+                int count = verts.size() / 6;
+                for (int vi = 0; vi < count; ++vi) {
+                    float *p = d + vi * 6;
+                    p[0] *= w;   // X by width
+                    p[1] *= h;   // Y by height
+                    p[2] *= (w + h) * 0.5f; // Z (rays) by average
+                }
+            }
+            isLineOnly = true;
         } else if (type == "DiskLight") {
-            float ps = 1.f / m_unitScale;
-            genDisk(0.5f * ps, verts, indices);
+            float r = 0.5f;
+            UsdLuxDiskLight diskLight(prim);
+            diskLight.GetRadiusAttr().Get(&r);
+            qDebug() << "DiskLight" << prim.GetPath().GetText() << "r=" << r;
+            genDiskLightGizmo(r, verts, indices);
+            isLineOnly = true;
         } else if (type == "CylinderLight") {
             float ps = 1.f / m_unitScale;
             genCylinder(0.5f * ps, 1.0f * ps, verts, indices);
@@ -1305,6 +1397,7 @@ void UsdViewportItem::buildMeshes()
         MeshData md;
         md.vertices = std::move(verts);
         md.indices  = std::move(indices);
+        md.lineOnly = isLineOnly;
 
         // Display color — lights/camera use fixed colors, geometry uses displayColor
         static const QVector3D lightColor(1.0f, 0.84f, 0.0f);  // warm yellow
@@ -1335,8 +1428,8 @@ void UsdViewportItem::buildMeshes()
                 mf[c*4+r] = float(xf[r][c]);
         md.transform = unitScaleMat * QMatrix4x4(mf);
 
-        // Extract unique edges from triangle indices
-        {
+        // Extract unique edges from triangle indices (skip for line-only meshes)
+        if (!md.lineOnly) {
             QSet<quint64> edgeSet;
             for (int i = 0; i + 2 < md.indices.size(); i += 3) {
                 quint32 i0 = md.indices[i], i1 = md.indices[i+1], i2 = md.indices[i+2];
@@ -1356,7 +1449,8 @@ void UsdViewportItem::buildMeshes()
 
         md.primPath = QString::fromStdString(prim.GetPath().GetString());
 
-        computeSmoothNormals(md);
+        if (!md.lineOnly)
+            computeSmoothNormals(md);
         m_meshes << md;
     }
 
@@ -1409,22 +1503,39 @@ void UsdViewportItem::buildMeshes()
             ld.type = 1;
             ld.position = worldPos;
             // Match Hydra Storm: for area lights with normalize=false (default),
-            // multiply intensity by projected area (π*r² for sphere/disk).
+            // multiply intensity by projected area.
             // The shader then uses 1/(π*d²) attenuation.
             float radiusScene = 0.5f;  // in scene units
+            float areaScene = 0.f;     // projected area for intensity scaling
             if (type == "SphereLight") {
                 double r = 0.5;
                 UsdLuxSphereLight(prim).GetRadiusAttr().Get(&r);
                 radiusScene = float(r);
+                areaScene = float(M_PI) * radiusScene * radiusScene;
+            } else if (type == "RectLight") {
+                float w = 1.0f, h = 1.0f;
+                UsdLuxRectLight(prim).GetWidthAttr().Get(&w);
+                UsdLuxRectLight(prim).GetHeightAttr().Get(&h);
+                radiusScene = std::sqrt(w * h / float(M_PI)); // equivalent radius
+                areaScene = w * h;
+            } else if (type == "DiskLight") {
+                float r = 0.5f;
+                UsdLuxDiskLight(prim).GetRadiusAttr().Get(&r);
+                radiusScene = r;
+                areaScene = float(M_PI) * radiusScene * radiusScene;
+            } else {
+                // CylinderLight etc.
+                areaScene = float(M_PI) * radiusScene * radiusScene;
             }
-            ld.radius = radiusScene * m_unitScale;  // for singularity avoidance in shader
-            // Check normalize attribute
+            ld.radius = radiusScene * m_unitScale;
+            // Directional area lights (rect/disk): emission along -Z in local space
+            if (type == "RectLight" || type == "DiskLight") {
+                ld.direction = -worldDir; // -Z world = emission direction
+            }
             bool normalize = false;
             lightApi.GetNormalizeAttr().Get(&normalize);
             if (!normalize) {
-                // Storm: intensity *= π * r² (cross-section area)
-                float area = float(M_PI) * radiusScene * radiusScene;
-                effColor *= area;
+                effColor *= areaScene;
             }
         }
         ld.color = effColor;
@@ -1574,6 +1685,10 @@ void UsdViewportItem::updateLightsFromMeshTransforms()
             if (light.type == 1) {
                 // Point light: extract position from transform column 3
                 light.position = xf.column(3).toVector3D();
+                // Directional area lights (rect/disk): update emission direction (-Z axis)
+                QVector3D dir = light.direction;
+                if (dir.lengthSquared() > 0.001f)
+                    light.direction = -xf.column(2).toVector3D().normalized();
             } else if (light.type == 0) {
                 // Distant light: extract direction from transform column 2 (+Z axis)
                 light.direction = xf.column(2).toVector3D().normalized();
@@ -2382,6 +2497,41 @@ int UsdViewportItem::pickMesh(const QPointF &pos) const
         const float *vd = md.vertices.constData();
         const int stride = 6; // x,y,z,nx,ny,nz
 
+        // Line-only meshes: use bounding sphere test for picking
+        if (md.lineOnly) {
+            // Compute bounding sphere from vertices
+            int vertCount = md.vertices.size() / stride;
+            if (vertCount == 0) continue;
+            QVector3D center(0, 0, 0);
+            for (int vi = 0; vi < vertCount; vi++)
+                center += QVector3D(vd[vi*stride], vd[vi*stride+1], vd[vi*stride+2]);
+            center /= float(vertCount);
+            float maxR2 = 0;
+            for (int vi = 0; vi < vertCount; vi++) {
+                QVector3D p(vd[vi*stride], vd[vi*stride+1], vd[vi*stride+2]);
+                maxR2 = qMax(maxR2, (p - center).lengthSquared());
+            }
+            // Ray-sphere intersection
+            QVector3D oc = orig - center;
+            float b = QVector3D::dotProduct(oc, dir);
+            float c = QVector3D::dotProduct(oc, oc) - maxR2;
+            float disc = b * b - c;
+            if (disc >= 0) {
+                float t = -b - sqrtf(disc);
+                if (t < 1e-5f) t = -b + sqrtf(disc);
+                if (t > 1e-5f) {
+                    QVector3D localHit = orig + dir * t;
+                    QVector3D worldHit = md.transform.map(localHit);
+                    float worldT = QVector3D::dotProduct(worldHit - rayOrig, rayDir);
+                    if (worldT > 1e-5f && worldT < bestWorldT) {
+                        bestWorldT = worldT;
+                        bestIdx = mi;
+                    }
+                }
+            }
+            continue;
+        }
+
         for (int i = 0; i + 2 < md.indices.size(); i += 3) {
             int i0 = md.indices[i], i1 = md.indices[i+1], i2 = md.indices[i+2];
             QVector3D v0(vd[i0*stride], vd[i0*stride+1], vd[i0*stride+2]);
@@ -2445,6 +2595,7 @@ UsdViewportRenderer::~UsdViewportRenderer()
     delete m_stencilPipeline;
     delete m_gizmoPipeline;
     delete m_gridPipeline;
+    delete m_lineMeshPipeline;
 }
 
 void UsdViewportRenderer::destroyMeshes()
@@ -2467,11 +2618,15 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
     const int isize = src.indices.size()  * sizeof(quint32);
 
     dst.vbuf = rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, vsize);
-    dst.vbufSmooth = rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, vsize);
     dst.ibuf = rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::IndexBuffer,  isize);
     // UBO layout: mvp(64) + model(64) + color(16) + lightDir(16) = 160
     dst.ubuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 160);
-    dst.vbuf->create(); dst.vbufSmooth->create(); dst.ibuf->create(); dst.ubuf->create();
+    dst.vbuf->create(); dst.ibuf->create(); dst.ubuf->create();
+
+    if (!src.lineOnly) {
+        dst.vbufSmooth = rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, vsize);
+        dst.vbufSmooth->create();
+    }
 
     dst.srb = rhi->newShaderResourceBindings();
     dst.srb->setBindings({
@@ -2487,28 +2642,32 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
     dst.srb->create();
 
     batch->uploadStaticBuffer(dst.vbuf, src.vertices.constData());
-    batch->uploadStaticBuffer(dst.vbufSmooth, src.smoothVertices.constData());
+    if (!src.lineOnly)
+        batch->uploadStaticBuffer(dst.vbufSmooth, src.smoothVertices.constData());
     batch->uploadStaticBuffer(dst.ibuf, src.indices.constData());
 
-    // Per-mesh wire UBO + SRB for outline rendering
-    dst.wireUbuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 160);
-    dst.wireUbuf->create();
-    dst.wireSrb = rhi->newShaderResourceBindings();
-    dst.wireSrb->setBindings({
-        QRhiShaderResourceBinding::uniformBuffer(
-            0,
-            QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
-            dst.wireUbuf),
-        QRhiShaderResourceBinding::uniformBuffer(
-            1,
-            QRhiShaderResourceBinding::FragmentStage,
-            m_lightUbuf)
-    });
-    dst.wireSrb->create();
+    // Per-mesh wire UBO + SRB for outline rendering (not needed for lineOnly)
+    if (!src.lineOnly) {
+        dst.wireUbuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 160);
+        dst.wireUbuf->create();
+        dst.wireSrb = rhi->newShaderResourceBindings();
+        dst.wireSrb->setBindings({
+            QRhiShaderResourceBinding::uniformBuffer(
+                0,
+                QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
+                dst.wireUbuf),
+            QRhiShaderResourceBinding::uniformBuffer(
+                1,
+                QRhiShaderResourceBinding::FragmentStage,
+                m_lightUbuf)
+        });
+        dst.wireSrb->create();
+    }
 
     dst.indexCount = src.indices.size();
     dst.transform  = src.transform;
     dst.color      = src.color;
+    dst.lineOnly   = src.lineOnly;
 
     // Compute centroid from vertices (model space)
     {
@@ -2521,8 +2680,8 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
         dst.centroid = c;
     }
 
-    // Edge index buffer
-    if (!src.edges.isEmpty()) {
+    // Edge index buffer (not needed for lineOnly meshes)
+    if (!src.lineOnly && !src.edges.isEmpty()) {
         const int esize = src.edges.size() * sizeof(quint32);
         dst.ibufEdge = rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::IndexBuffer, esize);
         dst.ibufEdge->create();
@@ -2663,6 +2822,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         delete m_pipeline; m_pipeline = nullptr;
         delete m_wirePipeline; m_wirePipeline = nullptr;
         delete m_stencilPipeline; m_stencilPipeline = nullptr;
+        delete m_lineMeshPipeline; m_lineMeshPipeline = nullptr;
         m_meshes.resize(m_pending.size());
         for (int i = 0; i < m_pending.size(); i++)
             uploadMesh(m_meshes[i], m_pending[i], upd);
@@ -2724,7 +2884,13 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float3, 3 * sizeof(float))
         });
 
-        // Solid pipeline
+        // Find first non-lineOnly mesh for pipeline SRB layout
+        int solidIdx = -1;
+        for (int i = 0; i < m_meshes.size(); ++i) {
+            if (!m_meshes[i].lineOnly) { solidIdx = i; break; }
+        }
+
+        // Solid pipeline (Triangles)
         m_pipeline = rhi->newGraphicsPipeline();
         QRhiGraphicsPipeline::TargetBlend blend; blend.enable = false;
         m_pipeline->setTargetBlends({blend});
@@ -2741,6 +2907,28 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         m_pipeline->setSampleCount(renderTarget()->sampleCount());
         m_pipeline->create();
 
+        // Line mesh pipeline (Lines topology, depth test ON, for light gizmo wireframes)
+        m_lineMeshPipeline = rhi->newGraphicsPipeline();
+        m_lineMeshPipeline->setTopology(QRhiGraphicsPipeline::Lines);
+        m_lineMeshPipeline->setLineWidth(1.f);
+        QRhiGraphicsPipeline::TargetBlend lineBlend; lineBlend.enable = false;
+        m_lineMeshPipeline->setTargetBlends({lineBlend});
+        m_lineMeshPipeline->setDepthTest(true);
+        m_lineMeshPipeline->setDepthWrite(true);
+        m_lineMeshPipeline->setStencilTest(false);
+        m_lineMeshPipeline->setCullMode(QRhiGraphicsPipeline::None);
+        m_lineMeshPipeline->setShaderStages({
+            { QRhiShaderStage::Vertex,   m_vs },
+            { QRhiShaderStage::Fragment, m_fs }
+        });
+        m_lineMeshPipeline->setVertexInputLayout(il);
+        m_lineMeshPipeline->setShaderResourceBindings(m_meshes[0].srb);
+        m_lineMeshPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_lineMeshPipeline->setSampleCount(renderTarget()->sampleCount());
+        m_lineMeshPipeline->create();
+
+        // Stencil/wire pipelines only if there are solid meshes
+        if (solidIdx >= 0) {
         // Stencil-write pipeline: render selected mesh to mark stencil=1, no color output
         m_stencilPipeline = rhi->newGraphicsPipeline();
         m_stencilPipeline->setTopology(QRhiGraphicsPipeline::Triangles);
@@ -2770,7 +2958,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             { QRhiShaderStage::Fragment, m_fs }
         });
         m_stencilPipeline->setVertexInputLayout(il);
-        m_stencilPipeline->setShaderResourceBindings(m_meshes[0].wireSrb);
+        m_stencilPipeline->setShaderResourceBindings(m_meshes[solidIdx].wireSrb);
         m_stencilPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
         m_stencilPipeline->setSampleCount(renderTarget()->sampleCount());
         m_stencilPipeline->create();
@@ -2800,10 +2988,11 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             { QRhiShaderStage::Fragment, m_fs }
         });
         m_wirePipeline->setVertexInputLayout(il);
-        m_wirePipeline->setShaderResourceBindings(m_meshes[0].wireSrb);
+        m_wirePipeline->setShaderResourceBindings(m_meshes[solidIdx].wireSrb);
         m_wirePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
         m_wirePipeline->setSampleCount(renderTarget()->sampleCount());
         m_wirePipeline->create();
+        } // solidIdx >= 0
     }
 
     // Gizmo / orient axes pipeline (no depth test, always on top)
@@ -2905,14 +3094,15 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         memcpy(ub.mvp,   mvp.constData(),          64);
         memcpy(ub.model, m.transform.constData(),   64);
         ub.color[0] = m.color.x(); ub.color[1] = m.color.y();
-        ub.color[2] = m.color.z(); ub.color[3] = 1.f;
+        ub.color[2] = m.color.z();
+        ub.color[3] = m.lineOnly ? 0.f : 1.f;  // lineOnly → flat color (no lighting)
         // Pass camera eye in lightDir.xyz for normal-flip in fragment shader
         ub.lightDir[0] = m_cameraEye.x(); ub.lightDir[1] = m_cameraEye.y();
         ub.lightDir[2] = m_cameraEye.z(); ub.lightDir[3] = 0.f;
         upd->updateDynamicBuffer(m.ubuf, 0, sizeof(UBuf), &ub);
 
-        // Pre-upload outline UBO for selected meshes (avoids mid-pass updates)
-        if (m_selectedIndices.contains(i)) {
+        // Pre-upload outline UBO for selected meshes (skip lineOnly — no stencil outline)
+        if (m_selectedIndices.contains(i) && !m.lineOnly && m.wireUbuf) {
             UBuf wub{};
             memcpy(wub.mvp,   mvp.constData(),          64);
             memcpy(wub.model, m.transform.constData(),   64);
@@ -3022,20 +3212,37 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
     }
 
     if (m_pipeline) {
+    // Draw solid (triangle) meshes
     cb->setGraphicsPipeline(m_pipeline);
     cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
-
     for (auto &m : m_meshes) {
+        if (m.lineOnly) continue;
         cb->setShaderResources(m.srb);
         QRhiCommandBuffer::VertexInput vi(m.vbuf, 0);
         cb->setVertexInput(0, 1, &vi, m.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
         cb->drawIndexed(m.indexCount);
     }
 
+    // Draw line-only meshes (light gizmo wireframes)
+    if (m_lineMeshPipeline) {
+        cb->setGraphicsPipeline(m_lineMeshPipeline);
+        cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
+        for (auto &m : m_meshes) {
+            if (!m.lineOnly) continue;
+            cb->setShaderResources(m.srb);
+            QRhiCommandBuffer::VertexInput vi(m.vbuf, 0);
+            cb->setVertexInput(0, 1, &vi, m.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
+            cb->drawIndexed(m.indexCount);
+        }
+    }
+
     // Selection outline for each selected mesh (stencil mask + inverted hull)
+    // Skip lineOnly meshes — they have no stencil outline support
+    if (m_stencilPipeline && m_wirePipeline) {
     for (int selIdx : m_selectedIndices) {
         if (selIdx < 0 || selIdx >= m_meshes.size()) continue;
         auto &sel = m_meshes[selIdx];
+        if (sel.lineOnly) continue;
 
         // Pass 1: Write stencil=1 for this mesh (use original vbuf for exact shape)
         cb->setGraphicsPipeline(m_stencilPipeline);
@@ -3063,6 +3270,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         cb->setVertexInput(0, 1, &vi3, sel.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
         cb->drawIndexed(sel.indexCount);
     }
+    } // stencil/wire pipelines
     } // if (m_pipeline)
 
     // Gizmo rendering (always on top, no depth test)
