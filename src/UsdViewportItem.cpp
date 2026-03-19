@@ -35,6 +35,7 @@
 #include <pxr/usd/usdLux/diskLight.h>
 #include <pxr/usd/usdLux/domeLight.h>
 #include <pxr/usd/usdLux/cylinderLight.h>
+#include <pxr/usd/usdLux/lightAPI.h>
 #include <pxr/base/gf/matrix4d.h>
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/vt/array.h>
@@ -121,6 +122,11 @@ private:
     bool m_showGrid = false;
 
     float m_unitScale = 1.f;
+
+    // Scene lights
+    QVector<LightData> m_sceneLights;
+    QRhiBuffer *m_lightUbuf = nullptr;
+    QVector3D m_cameraEye;
 };
 
 // ================================================================
@@ -1271,8 +1277,20 @@ void UsdViewportItem::buildMeshes()
             cl.GetLengthAttr().Get(&l);
             genCylinder(float(r), float(l), verts, indices);
         } else if (type == "DistantLight") {
-            // Visual indicator: small cone pointing downward
+            // Visual indicator: cone pointing along local -Z (USD light emission axis)
             genCone(0.3f, 0.6f, verts, indices);
+            // Rotate from Y-up to -Z: (x,y,z) → (x,z,-y), same for normals
+            {
+                float *d = verts.data();
+                int count = verts.size() / 6;
+                for (int vi = 0; vi < count; ++vi) {
+                    float *p = d + vi * 6;
+                    float oy = p[1], oz = p[2];
+                    p[1] = oz; p[2] = -oy;
+                    float ny = p[4], nz = p[5];
+                    p[4] = nz; p[5] = -ny;
+                }
+            }
         } else if (type == "DomeLight") {
             double r = 1.0; UsdLuxDomeLight(prim).GetGuideRadiusAttr().Get(&r);
             genHemisphere(float(r), verts, indices);
@@ -1342,6 +1360,75 @@ void UsdViewportItem::buildMeshes()
 
         computeSmoothNormals(md);
         m_meshes << md;
+    }
+
+    // ── Extract light data from USD light prims ──
+    m_lights.clear();
+    for (const UsdPrim &prim : stage->Traverse(UsdTraverseInstanceProxies())) {
+        const TfToken type = prim.GetTypeName();
+        bool isLight = (type == "SphereLight" || type == "RectLight" ||
+                        type == "DiskLight"   || type == "CylinderLight" ||
+                        type == "DistantLight" || type == "DomeLight");
+        if (!isLight) continue;
+        if (m_lights.size() >= 16) break;
+
+        UsdGeomImageable img(prim);
+        if (img && img.ComputeVisibility() == UsdGeomTokens->invisible)
+            continue;
+
+        UsdLuxLightAPI lightApi(prim);
+        GfVec3f col(1, 1, 1);
+        float intensity = 1.f, exposure = 0.f;
+        lightApi.GetColorAttr().Get(&col);
+        lightApi.GetIntensityAttr().Get(&intensity);
+        lightApi.GetExposureAttr().Get(&exposure);
+
+        float scale = intensity * std::pow(2.f, exposure);
+        // Normalize intensity: our renderer has no tonemapping, so cap
+        // the effective brightness to keep colors visible.
+        // Preserve color hue by scaling uniformly.
+        float maxComp = std::max({col[0] * scale, col[1] * scale, col[2] * scale, 1.f});
+        float normScale = scale / maxComp;
+        QVector3D effColor(col[0] * normScale, col[1] * normScale, col[2] * normScale);
+
+        GfMatrix4d xf = xfCache.GetLocalToWorldTransform(prim);
+        auto pos3 = xf.GetRow(3);
+        QVector3D worldPos(pos3[0] * m_unitScale, pos3[1] * m_unitScale, pos3[2] * m_unitScale);
+        // +Z axis = direction towards the light (for shader's L vector)
+        auto zAxis = xf.GetRow(2);
+        QVector3D worldDir(zAxis[0], zAxis[1], zAxis[2]);
+        worldDir.normalize();
+
+        LightData ld;
+        if (type == "DistantLight") {
+            ld.type = 0;
+            ld.direction = worldDir;
+            ld.radius = 0.f;
+        } else if (type == "DomeLight") {
+            ld.type = 2;
+            ld.radius = 0.f;
+        } else {
+            ld.type = 1;
+            ld.position = worldPos;
+            ld.radius = 1.f;
+            if (type == "SphereLight") {
+                double r = 0.5;
+                UsdLuxSphereLight(prim).GetRadiusAttr().Get(&r);
+                ld.radius = float(r) * m_unitScale;
+            }
+        }
+        ld.color = effColor;
+        m_lights << ld;
+    }
+
+    // Default fallback: directional light when no lights in scene
+    if (m_lights.isEmpty()) {
+        LightData fallback;
+        fallback.type = 0;
+        fallback.direction = QVector3D(0.6f, 1.f, 0.8f).normalized();
+        fallback.color = QVector3D(1.f, 1.f, 1.f);
+        fallback.radius = 0.f;
+        m_lights << fallback;
     }
 
     // Compute scene bounding sphere and initialize camera on first load
@@ -2315,6 +2402,7 @@ UsdViewportRenderer::~UsdViewportRenderer()
         delete g.vbuf; delete g.ibuf;
         delete g.ubuf; delete g.srb;
     }
+    delete m_lightUbuf;
     delete m_pipeline;
     delete m_wirePipeline;
     delete m_stencilPipeline;
@@ -2353,7 +2441,11 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
         QRhiShaderResourceBinding::uniformBuffer(
             0,
             QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
-            dst.ubuf)
+            dst.ubuf),
+        QRhiShaderResourceBinding::uniformBuffer(
+            1,
+            QRhiShaderResourceBinding::FragmentStage,
+            m_lightUbuf)
     });
     dst.srb->create();
 
@@ -2369,7 +2461,11 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
         QRhiShaderResourceBinding::uniformBuffer(
             0,
             QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
-            dst.wireUbuf)
+            dst.wireUbuf),
+        QRhiShaderResourceBinding::uniformBuffer(
+            1,
+            QRhiShaderResourceBinding::FragmentStage,
+            m_lightUbuf)
     });
     dst.wireSrb->create();
 
@@ -2424,7 +2520,11 @@ void UsdViewportRenderer::uploadGizmoMesh(RhiGizmoMesh &dst, const GizmoMeshData
         QRhiShaderResourceBinding::uniformBuffer(
             0,
             QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
-            dst.ubuf)
+            dst.ubuf),
+        QRhiShaderResourceBinding::uniformBuffer(
+            1,
+            QRhiShaderResourceBinding::FragmentStage,
+            m_lightUbuf)
     });
     dst.srb->create();
 
@@ -2442,6 +2542,11 @@ void UsdViewportRenderer::initialize(QRhiCommandBuffer *)
     m_initialized = true;
     m_vs = loadShader(":/shaders/viewport.vert.qsb");
     m_fs = loadShader(":/shaders/viewport.frag.qsb");
+
+    // Scene light UBO (std140: 48 bytes/light * 16 + 16 = 784)
+    QRhi *rhi = renderTarget()->rhi();
+    m_lightUbuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 784);
+    m_lightUbuf->create();
 }
 
 void UsdViewportRenderer::synchronize(QQuickRhiItem *item)
@@ -2451,8 +2556,10 @@ void UsdViewportRenderer::synchronize(QQuickRhiItem *item)
     m_proj = vp->projMatrix();
     m_selectedIndices = vp->selectedMeshes();
     m_unitScale = vp->unitScale();
+    m_cameraEye = vp->cameraEye();
     if (vp->meshDirty()) {
         m_pending = vp->meshes();
+        m_sceneLights = vp->lights();
         vp->clearMeshDirty();
         m_rebuild = true;
     }
@@ -2722,11 +2829,37 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
     }
 
     const QSize sz = renderTarget()->pixelSize();
-    const QVector3D lightDir = QVector3D(0.6f, 1.f, 0.8f).normalized();
 
     struct alignas(16) UBuf {
         float mvp[16], model[16], color[4], lightDir[4];
     };
+
+    // Upload scene lights UBO
+    {
+        struct alignas(16) LightUBuf {
+            struct { float posType[4]; float dirRadius[4]; float color[4]; } lights[16];
+            int numLights[4];
+        };
+        LightUBuf lub{};
+        int count = qMin(m_sceneLights.size(), 16);
+        for (int i = 0; i < count; ++i) {
+            const auto &l = m_sceneLights[i];
+            lub.lights[i].posType[0] = l.position.x();
+            lub.lights[i].posType[1] = l.position.y();
+            lub.lights[i].posType[2] = l.position.z();
+            lub.lights[i].posType[3] = float(l.type);
+            lub.lights[i].dirRadius[0] = l.direction.x();
+            lub.lights[i].dirRadius[1] = l.direction.y();
+            lub.lights[i].dirRadius[2] = l.direction.z();
+            lub.lights[i].dirRadius[3] = l.radius;
+            lub.lights[i].color[0] = l.color.x();
+            lub.lights[i].color[1] = l.color.y();
+            lub.lights[i].color[2] = l.color.z();
+            lub.lights[i].color[3] = 0.f;
+        }
+        lub.numLights[0] = count;
+        upd->updateDynamicBuffer(m_lightUbuf, 0, sizeof(LightUBuf), &lub);
+    }
 
     for (int i = 0; i < m_meshes.size(); ++i) {
         auto &m = m_meshes[i];
@@ -2736,8 +2869,9 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         memcpy(ub.model, m.transform.constData(),   64);
         ub.color[0] = m.color.x(); ub.color[1] = m.color.y();
         ub.color[2] = m.color.z(); ub.color[3] = 1.f;
-        ub.lightDir[0] = lightDir.x(); ub.lightDir[1] = lightDir.y();
-        ub.lightDir[2] = lightDir.z(); ub.lightDir[3] = 0.f;
+        // Pass camera eye in lightDir.xyz for normal-flip in fragment shader
+        ub.lightDir[0] = m_cameraEye.x(); ub.lightDir[1] = m_cameraEye.y();
+        ub.lightDir[2] = m_cameraEye.z(); ub.lightDir[3] = 0.f;
         upd->updateDynamicBuffer(m.ubuf, 0, sizeof(UBuf), &ub);
 
         // Pre-upload outline UBO for selected meshes (avoids mid-pass updates)
