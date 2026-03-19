@@ -43,6 +43,14 @@ enum RotatePartId {
     RotatePartCount = 3
 };
 
+struct LightData {
+    int type;           // 0=distant, 1=point, 2=dome
+    QVector3D position; // world-space (point lights)
+    QVector3D direction;// world-space (distant light)
+    QVector3D color;    // effective color: color * intensity * 2^exposure
+    float radius;       // for point light attenuation
+};
+
 struct GizmoMeshData {
     QVector<float>   vertices;      // [x,y,z,nx,ny,nz] stride=6
     QVector<quint32> indices;
@@ -102,10 +110,12 @@ public:
     void clearGridDirty() { m_gridDirty = false; }
 
     const QVector<MeshData> &meshes() const { return m_meshes; }
+    const QVector<LightData> &lights() const { return m_lights; }
     bool      meshDirty() const  { return m_meshDirty; }
     void      clearMeshDirty()   { m_meshDirty = false; }
     QMatrix4x4 viewMatrix() const { return m_view; }
     QMatrix4x4 projMatrix() const { return m_proj; }
+    QVector3D cameraEye() const { return m_cameraEye; }
     QSet<int> selectedMeshes() const { return m_selectedMeshes; }
     float unitScale() const { return m_unitScale; }
 
@@ -147,6 +157,7 @@ private:
 
     UsdDocument       *m_doc = nullptr;
     QVector<MeshData>  m_meshes;
+    QVector<LightData> m_lights;
     bool               m_meshDirty = false;
     QSet<int>          m_selectedMeshes;
     int                m_anchorMeshIdx = -1;  // last-selected mesh for gizmo placement
