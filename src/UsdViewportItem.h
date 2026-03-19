@@ -49,6 +49,7 @@ struct LightData {
     QVector3D direction;// world-space (distant light)
     QVector3D color;    // effective color: color * intensity * 2^exposure
     float radius;       // for point light attenuation
+    QString primPath;   // USD prim path (for gizmo live-update matching)
 };
 
 struct GizmoMeshData {
@@ -154,6 +155,7 @@ private:
     int  pickGizmo(const QPointF &pos) const;
     void updateGizmoPosition();
     void updateOrientLabels();
+    void updateLightsFromMeshTransforms();
 
     UsdDocument       *m_doc = nullptr;
     QVector<MeshData>  m_meshes;

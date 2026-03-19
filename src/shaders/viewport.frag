@@ -49,21 +49,24 @@ void main()
                 float d = max(dot(N, L), 0.0);
                 diffuse += lcol * d;
             } else if (ltype == 1) {
-                // Point light
+                // Point light — Hydra Storm style: 1/(π*d²) attenuation
                 vec3 toLight = lights[i].posType.xyz - vWorldPos;
-                float dist = length(toLight);
+                float dist2 = dot(toLight, toLight);
+                float dist = sqrt(dist2);
                 vec3 L = toLight / max(dist, 0.0001);
-                float d = max(dot(N, L), 0.0);
-                float r = max(lights[i].dirRadius.w, 0.01);
-                float atten = 1.0 / (1.0 + (dist * dist) / (r * r));
-                diffuse += lcol * d * atten;
+                float NdotL = max(dot(N, L), 0.0);
+                // Small epsilon to avoid singularity at dist=0
+                float atten = 1.0 / (3.14159 * max(dist2, 0.0001));
+                diffuse += lcol * NdotL * atten;
             } else {
                 // Dome light (ambient)
                 ambient += lcol;
             }
         }
 
-        fragColor = vec4(vColor * (ambient + diffuse), 1.0);
+        vec3 lit = vColor * (ambient + diffuse);
+        // Reinhard tonemapping: prevents blowout while preserving color
+        fragColor = vec4(lit / (lit + vec3(1.0)), 1.0);
     } else {
         // Flat color (outline / wireframe)
         fragColor = vec4(vColor, 1.0);
