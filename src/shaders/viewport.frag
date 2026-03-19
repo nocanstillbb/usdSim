@@ -57,10 +57,20 @@ void main()
                 float NdotL = max(dot(N, L), 0.0);
                 // Small epsilon to avoid singularity at dist=0
                 float atten = 1.0 / (3.14159 * max(dist2, 0.0001));
+                // Directional area lights (rect/disk): hemisphere cutoff
+                // direction is non-zero only for directional lights
+                vec3 emitDir = lights[i].dirRadius.xyz;
+                float dirLen2 = dot(emitDir, emitDir);
+                if (dirLen2 > 0.001) {
+                    // Only illuminate surfaces in front of the light
+                    float hemi = dot(normalize(emitDir), -L);
+                    atten *= max(hemi, 0.0);
+                }
                 diffuse += lcol * NdotL * atten;
             } else {
-                // Dome light (ambient)
-                ambient += lcol;
+                // Dome light — hemisphere ambient (more light from above)
+                float hemi = 0.5 + 0.5 * N.y;
+                ambient += lcol * mix(0.3, 1.0, hemi);
             }
         }
 

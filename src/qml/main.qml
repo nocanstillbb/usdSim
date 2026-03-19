@@ -58,7 +58,7 @@ ApplicationWindow {
         target: doc.undoStack
         function onIndexChanged() {
             if (root.selectedPrimPaths.length > 0)
-                attrPanel.reload()
+                attrPanel.refreshValues()
         }
     }
 

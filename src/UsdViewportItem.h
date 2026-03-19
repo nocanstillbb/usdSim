@@ -16,6 +16,7 @@ struct MeshData {
     QMatrix4x4       transform;
     QVector3D        color;
     QString          primPath;
+    bool             lineOnly = false; // true = render with Lines topology (light gizmos)
 };
 
 enum GizmoMode {

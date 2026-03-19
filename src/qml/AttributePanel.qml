@@ -22,6 +22,19 @@ Rectangle {
             document.refreshAttributes(selectedPrimPaths)
     }
 
+    function _scrollToSelected() {
+        panel.forceActiveFocus()
+        if (attrList.selectedIndex >= 0)
+            scrollTimer.restart()
+    }
+    Timer {
+        id: scrollTimer; interval: 50; repeat: false
+        onTriggered: {
+            if (attrList.selectedIndex >= 0)
+                attrList.positionViewAtIndex(attrList.selectedIndex, ListView.Center)
+        }
+    }
+
     function reload() {
         _loadAttributes()
     }
@@ -57,7 +70,7 @@ Rectangle {
         }
         if (ok) {
             statusMessage("已更新: " + name + " = " + newText)
-            Qt.callLater(_loadAttributes)
+            // stageModified + undoStack.indexChanged already trigger refreshValues
         } else {
             statusMessage("不支持直接编辑: " + typeName)
         }
@@ -164,8 +177,11 @@ Rectangle {
         }
 
         // Search bar
-        Rectangle {
-            Layout.fillWidth: true; height: 32; color: "#252525"
+        Item {
+            Layout.fillWidth: true; height: 32
+            Rectangle {
+                anchors.fill: parent; color: "#252525"
+            }
             TextField {
                 id: searchField
                 anchors.fill: parent
@@ -174,7 +190,21 @@ Rectangle {
                 placeholderText: "搜索属性..."
                 placeholderTextColor: "#555555"
                 font.pixelSize: 11; color: "#cccccc"
+                rightPadding: 20
                 background: Rectangle { color: "#1e1e1e"; radius: 3; border.color: searchField.activeFocus ? "#0078d4" : "#333333" }
+                Keys.onEscapePressed: { searchField.text = ""; _scrollToSelected() }
+            }
+            Label {
+                visible: searchField.text.length > 0
+                anchors.right: searchField.right; anchors.rightMargin: 4
+                anchors.verticalCenter: searchField.verticalCenter
+                text: "\u2715"; color: clearSearchArea.containsMouse ? "#cccccc" : "#888888"; font.pixelSize: 11
+                MouseArea {
+                    id: clearSearchArea
+                    anchors.fill: parent; anchors.margins: -4
+                    cursorShape: Qt.PointingHandCursor; hoverEnabled: true
+                    onClicked: { searchField.text = ""; _scrollToSelected() }
+                }
             }
         }
 
