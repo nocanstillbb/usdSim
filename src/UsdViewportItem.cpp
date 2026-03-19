@@ -1258,27 +1258,25 @@ void UsdViewportItem::buildMeshes()
             genMesh(UsdGeomMesh(prim), verts, indices);
 
         // ── Light types ──
+        // Light proxy/guide meshes use a fixed visual size (like Houdini/Isaac Sim).
+        // Scale by 1/m_unitScale so proxies appear the same size in any unit system.
+        // Physical light attributes (radius, width, etc.) only affect lighting, not proxy size.
         } else if (type == "SphereLight") {
-            double r = 0.5; UsdLuxSphereLight(prim).GetRadiusAttr().Get(&r);
-            genSphere(float(r), verts, indices);
+            float ps = 1.f / m_unitScale;
+            genSphere(0.5f * ps, verts, indices);
         } else if (type == "RectLight") {
-            double w = 1.0, h = 1.0;
-            UsdLuxRectLight rl(prim);
-            rl.GetWidthAttr().Get(&w);
-            rl.GetHeightAttr().Get(&h);
-            genPlane(float(w), float(h), verts, indices);
+            float ps = 1.f / m_unitScale;
+            genPlane(1.0f * ps, 1.0f * ps, verts, indices);
         } else if (type == "DiskLight") {
-            double r = 0.5; UsdLuxDiskLight(prim).GetRadiusAttr().Get(&r);
-            genDisk(float(r), verts, indices);
+            float ps = 1.f / m_unitScale;
+            genDisk(0.5f * ps, verts, indices);
         } else if (type == "CylinderLight") {
-            double r = 0.5, l = 1.0; TfToken axis;
-            UsdLuxCylinderLight cl(prim);
-            cl.GetRadiusAttr().Get(&r);
-            cl.GetLengthAttr().Get(&l);
-            genCylinder(float(r), float(l), verts, indices);
+            float ps = 1.f / m_unitScale;
+            genCylinder(0.5f * ps, 1.0f * ps, verts, indices);
         } else if (type == "DistantLight") {
             // Visual indicator: cone pointing along local -Z (USD light emission axis)
-            genCone(0.3f, 0.6f, verts, indices);
+            float ps = 1.f / m_unitScale;
+            genCone(0.3f * ps, 0.6f * ps, verts, indices);
             // Rotate from Y-up to -Z: (x,y,z) → (x,z,-y), same for normals
             {
                 float *d = verts.data();
@@ -1292,8 +1290,8 @@ void UsdViewportItem::buildMeshes()
                 }
             }
         } else if (type == "DomeLight") {
-            double r = 1.0; UsdLuxDomeLight(prim).GetGuideRadiusAttr().Get(&r);
-            genHemisphere(float(r), verts, indices);
+            float ps = 1.f / m_unitScale;
+            genHemisphere(1.0f * ps, verts, indices);
 
         // ── Camera ──
         } else if (type == "Camera") {
@@ -1384,12 +1382,7 @@ void UsdViewportItem::buildMeshes()
         lightApi.GetExposureAttr().Get(&exposure);
 
         float scale = intensity * std::pow(2.f, exposure);
-        // Normalize intensity: our renderer has no tonemapping, so cap
-        // the effective brightness to keep colors visible.
-        // Preserve color hue by scaling uniformly.
-        float maxComp = std::max({col[0] * scale, col[1] * scale, col[2] * scale, 1.f});
-        float normScale = scale / maxComp;
-        QVector3D effColor(col[0] * normScale, col[1] * normScale, col[2] * normScale);
+        QVector3D effColor(col[0] * scale, col[1] * scale, col[2] * scale);
 
         GfMatrix4d xf = xfCache.GetLocalToWorldTransform(prim);
         auto pos3 = xf.GetRow(3);
@@ -1404,20 +1397,38 @@ void UsdViewportItem::buildMeshes()
             ld.type = 0;
             ld.direction = worldDir;
             ld.radius = 0.f;
+            // Distant/dome: no falloff, normalize to max 1.0
+            float mc = std::max({effColor.x(), effColor.y(), effColor.z(), 1.f});
+            effColor /= mc;
         } else if (type == "DomeLight") {
             ld.type = 2;
             ld.radius = 0.f;
+            float mc = std::max({effColor.x(), effColor.y(), effColor.z(), 1.f});
+            effColor /= mc;
         } else {
             ld.type = 1;
             ld.position = worldPos;
-            ld.radius = 1.f;
+            // Match Hydra Storm: for area lights with normalize=false (default),
+            // multiply intensity by projected area (π*r² for sphere/disk).
+            // The shader then uses 1/(π*d²) attenuation.
+            float radiusScene = 0.5f;  // in scene units
             if (type == "SphereLight") {
                 double r = 0.5;
                 UsdLuxSphereLight(prim).GetRadiusAttr().Get(&r);
-                ld.radius = float(r) * m_unitScale;
+                radiusScene = float(r);
+            }
+            ld.radius = radiusScene * m_unitScale;  // for singularity avoidance in shader
+            // Check normalize attribute
+            bool normalize = false;
+            lightApi.GetNormalizeAttr().Get(&normalize);
+            if (!normalize) {
+                // Storm: intensity *= π * r² (cross-section area)
+                float area = float(M_PI) * radiusScene * radiusScene;
+                effColor *= area;
             }
         }
         ld.color = effColor;
+        ld.primPath = QString::fromStdString(prim.GetPath().GetString());
         m_lights << ld;
     }
 
@@ -1547,6 +1558,29 @@ void UsdViewportItem::updateOrientLabels()
     m_orientLabels[1] = project(QVector3D(0, 1.15f, 0)); // Y
     m_orientLabels[2] = project(QVector3D(0, 0, 1.15f)); // Z
     emit orientLabelsChanged();
+}
+
+void UsdViewportItem::updateLightsFromMeshTransforms()
+{
+    // During gizmo drag, update light positions/directions from current mesh transforms
+    // so lighting updates in real-time without a full buildMeshes() rebuild.
+    for (auto &light : m_lights) {
+        if (light.primPath.isEmpty()) continue;
+        // Find the mesh with matching prim path among selected meshes
+        for (int idx : m_selectedMeshes) {
+            if (idx < 0 || idx >= m_meshes.size()) continue;
+            if (m_meshes[idx].primPath != light.primPath) continue;
+            const QMatrix4x4 &xf = m_meshes[idx].transform;
+            if (light.type == 1) {
+                // Point light: extract position from transform column 3
+                light.position = xf.column(3).toVector3D();
+            } else if (light.type == 0) {
+                // Distant light: extract direction from transform column 2 (+Z axis)
+                light.direction = xf.column(2).toVector3D().normalized();
+            }
+            break;
+        }
+    }
 }
 
 // ================================================================
@@ -1922,6 +1956,7 @@ void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
                     m_doc->setAttributeInternal(m_meshes[idx].primPath,
                                         QStringLiteral("xformOp:translate"), val);
                 }
+                updateLightsFromMeshTransforms();
                 emit gizmoDragUpdated();
             }
 
@@ -1977,6 +2012,7 @@ void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
                         }
                     }
                 }
+                updateLightsFromMeshTransforms();
                 emit gizmoDragUpdated();
             }
 
@@ -2093,6 +2129,7 @@ void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
                         }
                     }
                 }
+                updateLightsFromMeshTransforms();
                 emit gizmoDragUpdated();
             }
         }
