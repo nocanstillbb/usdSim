@@ -81,4 +81,12 @@ void main()
         // Flat color (outline / wireframe)
         fragColor = vec4(vColor, 1.0);
     }
+
+    // Grid mode: push depth slightly further to avoid z-fighting with co-planar geometry
+    // NOTE: once gl_FragDepth is written on any path, ALL paths must write it.
+    if (ubo.lightDir.w < -0.5) {
+        gl_FragDepth = gl_FragCoord.z + 0.00005;
+    } else {
+        gl_FragDepth = gl_FragCoord.z;
+    }
 }

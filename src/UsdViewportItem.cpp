@@ -1060,19 +1060,18 @@ void UsdViewportItem::buildOrientAxesMeshes(QVector<GizmoMeshData> &out)
 }
 
 // ================================================================
-//  Grid mesh generation (4 groups: small lines, large lines, axis1, axis2)
+//  Grid mesh generation (5 groups: micro, small, large lines, axis1, axis2)
 // ================================================================
 void UsdViewportItem::buildGridMeshes()
 {
     m_gridMeshes.clear();
-    m_gridMeshes.resize(4); // 0=small, 1=large, 2=axis-X/Y, 3=axis-Z/Y
+    m_gridMeshes.resize(5); // 0=micro(1u), 1=small(10u), 2=large(100u), 3=axis1, 4=axis2
 
     // Scale grid to scene units: base is ±10m in internal units (cm)
-    // For m_unitScale=1 (cm scenes): extent=1000, step=10/100
-    // For m_unitScale=100 (m scenes): extent=100000, step=1000/10000
     const float extent = 1000.f * qMax(1.f, m_unitScale);
-    const int smallStep = qMax(1, int(10.f * m_unitScale));    // small grid
-    const int largeStep = qMax(10, int(100.f * m_unitScale));  // large grid
+    const int microStep = qMax(1, int(1.f * m_unitScale));     // micro grid (1 unit)
+    const int smallStep = qMax(1, int(10.f * m_unitScale));    // small grid (10 units)
+    const int largeStep = qMax(10, int(100.f * m_unitScale));  // large grid (100 units)
     const int stride = 6;
 
     auto addLine = [&](GizmoMeshData &gm, float x0, float y0, float z0,
@@ -1083,12 +1082,19 @@ void UsdViewportItem::buildGridMeshes()
         gm.indices << base << base + 1;
     };
 
-    for (int i = -int(extent); i <= int(extent); i += smallStep) {
+    for (int i = -int(extent); i <= int(extent); i += microStep) {
         if (i == 0) continue; // axis lines handled separately
 
-        bool isMajor = (i % largeStep == 0);
-        auto &group = isMajor ? m_gridMeshes[1] : m_gridMeshes[0];
+        // Classify into micro / small / large
+        int groupIdx;
+        if (i % largeStep == 0)
+            groupIdx = 2; // large
+        else if (i % smallStep == 0)
+            groupIdx = 1; // small
+        else
+            groupIdx = 0; // micro
 
+        auto &group = m_gridMeshes[groupIdx];
         float fi = float(i);
         if (m_zUp) {
             addLine(group, -extent, fi, 0.f, extent, fi, 0.f);
@@ -1099,32 +1105,35 @@ void UsdViewportItem::buildGridMeshes()
         }
     }
 
-    // Small grid color
-    m_gridMeshes[0].color = QVector3D(0.18f, 0.18f, 0.18f);
+    // Micro grid color (very faint)
+    m_gridMeshes[0].color = QVector3D(0.10f, 0.10f, 0.10f);
     m_gridMeshes[0].highlightColor = m_gridMeshes[0].color;
-    // Large grid color
-    m_gridMeshes[1].color = QVector3D(0.30f, 0.30f, 0.30f);
+    // Small grid color
+    m_gridMeshes[1].color = QVector3D(0.18f, 0.18f, 0.18f);
     m_gridMeshes[1].highlightColor = m_gridMeshes[1].color;
+    // Large grid color
+    m_gridMeshes[2].color = QVector3D(0.30f, 0.30f, 0.30f);
+    m_gridMeshes[2].highlightColor = m_gridMeshes[2].color;
 
     // Axis lines through origin
     if (m_zUp) {
         // X axis (red)
-        addLine(m_gridMeshes[2], -extent, 0.f, 0.f, extent, 0.f, 0.f);
-        m_gridMeshes[2].color = QVector3D(1.0f, 0.2f, 0.2f);
-        m_gridMeshes[2].highlightColor = m_gridMeshes[2].color;
-        // Y axis (green)
-        addLine(m_gridMeshes[3], 0.f, -extent, 0.f, 0.f, extent, 0.f);
-        m_gridMeshes[3].color = QVector3D(0.2f, 1.0f, 0.2f);
+        addLine(m_gridMeshes[3], -extent, 0.f, 0.f, extent, 0.f, 0.f);
+        m_gridMeshes[3].color = QVector3D(1.0f, 0.2f, 0.2f);
         m_gridMeshes[3].highlightColor = m_gridMeshes[3].color;
+        // Y axis (green)
+        addLine(m_gridMeshes[4], 0.f, -extent, 0.f, 0.f, extent, 0.f);
+        m_gridMeshes[4].color = QVector3D(0.2f, 1.0f, 0.2f);
+        m_gridMeshes[4].highlightColor = m_gridMeshes[4].color;
     } else {
         // X axis (red)
-        addLine(m_gridMeshes[2], -extent, 0.f, 0.f, extent, 0.f, 0.f);
-        m_gridMeshes[2].color = QVector3D(1.0f, 0.2f, 0.2f);
-        m_gridMeshes[2].highlightColor = m_gridMeshes[2].color;
-        // Z axis (blue)
-        addLine(m_gridMeshes[3], 0.f, 0.f, -extent, 0.f, 0.f, extent);
-        m_gridMeshes[3].color = QVector3D(0.3f, 0.5f, 1.0f);
+        addLine(m_gridMeshes[3], -extent, 0.f, 0.f, extent, 0.f, 0.f);
+        m_gridMeshes[3].color = QVector3D(1.0f, 0.2f, 0.2f);
         m_gridMeshes[3].highlightColor = m_gridMeshes[3].color;
+        // Z axis (blue)
+        addLine(m_gridMeshes[4], 0.f, 0.f, -extent, 0.f, 0.f, extent);
+        m_gridMeshes[4].color = QVector3D(0.3f, 0.5f, 1.0f);
+        m_gridMeshes[4].highlightColor = m_gridMeshes[4].color;
     }
 
     m_gridDirty = true;
@@ -3223,7 +3232,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         gridBlend.enable = false;
         m_gridPipeline->setTargetBlends({gridBlend});
         m_gridPipeline->setDepthTest(true);
-        m_gridPipeline->setDepthWrite(true);
+        m_gridPipeline->setDepthWrite(false);      // grid never occludes geometry
         m_gridPipeline->setStencilTest(false);
         m_gridPipeline->setCullMode(QRhiGraphicsPipeline::None);
         m_gridPipeline->setShaderStages({
@@ -3374,25 +3383,13 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             memcpy(ub.model, id.constData(),       64);
             ub.color[0] = g.color.x(); ub.color[1] = g.color.y();
             ub.color[2] = g.color.z(); ub.color[3] = 0.f; // flat color mode
-            memset(ub.lightDir, 0, 16);
+            ub.lightDir[0] = 0.f; ub.lightDir[1] = 0.f;
+            ub.lightDir[2] = 0.f; ub.lightDir[3] = -1.f; // grid mode: push depth in frag shader
             upd->updateDynamicBuffer(g.ubuf, 0, sizeof(UBuf), &ub);
         }
     }
 
     cb->beginPass(renderTarget(), QColor(30, 30, 30), {1.f, 0}, upd);
-
-    // Grid rendering (before meshes, with depth test)
-    if (m_showGrid && m_gridPipeline && !m_rhiGrid.isEmpty()) {
-        cb->setGraphicsPipeline(m_gridPipeline);
-        cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
-        for (auto &g : m_rhiGrid) {
-            if (g.indexCount == 0) continue;
-            cb->setShaderResources(g.srb);
-            QRhiCommandBuffer::VertexInput gvi(g.vbuf, 0);
-            cb->setVertexInput(0, 1, &gvi, g.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
-            cb->drawIndexed(g.indexCount);
-        }
-    }
 
     if (m_pipeline) {
     // Draw solid (triangle) meshes — skip light gizmos unless selected
@@ -3406,6 +3403,19 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         QRhiCommandBuffer::VertexInput vi(m.vbuf, 0);
         cb->setVertexInput(0, 1, &vi, m.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
         cb->drawIndexed(m.indexCount);
+    }
+
+    // Grid rendering (after solid meshes so ground plane occludes grid via depth test)
+    if (m_showGrid && m_gridPipeline && !m_rhiGrid.isEmpty()) {
+        cb->setGraphicsPipeline(m_gridPipeline);
+        cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
+        for (auto &g : m_rhiGrid) {
+            if (g.indexCount == 0) continue;
+            cb->setShaderResources(g.srb);
+            QRhiCommandBuffer::VertexInput gvi(g.vbuf, 0);
+            cb->setVertexInput(0, 1, &gvi, g.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
+            cb->drawIndexed(g.indexCount);
+        }
     }
 
     // Draw line-only meshes (light gizmo wireframes) — only when selected
