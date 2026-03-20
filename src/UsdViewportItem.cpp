@@ -1814,8 +1814,10 @@ void UsdViewportItem::updateCamera()
                          ? float(width()) / float(height()) : 1.f;
     m_proj.setToIdentity();
     float gridExtent = 1000.f * qMax(1.f, m_unitScale);
+    float distToOrigin = eye.length();
     float nearP = qMax(0.001f, m_dist * 0.0005f);
-    float farP  = qMax(gridExtent * 3.f, m_dist * 50.f);
+    float farP  = std::max({gridExtent * 3.f, m_dist * 50.f,
+                            distToOrigin + gridExtent * 1.5f});
     m_proj.perspective(45.f, aspect, nearP, farP);
 
     updateOrientLabels();
@@ -3232,6 +3234,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         gridBlend.enable = false;
         m_gridPipeline->setTargetBlends({gridBlend});
         m_gridPipeline->setDepthTest(true);
+        m_gridPipeline->setDepthOp(QRhiGraphicsPipeline::LessOrEqual); // allow grid at far plane (bias may push z to 1.0)
         m_gridPipeline->setDepthWrite(false);      // grid never occludes geometry
         m_gridPipeline->setStencilTest(false);
         m_gridPipeline->setCullMode(QRhiGraphicsPipeline::None);
