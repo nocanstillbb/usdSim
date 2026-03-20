@@ -2457,7 +2457,7 @@ void UsdViewportItem::mouseMoveEvent(QMouseEvent *e)
         m_target += camUp * float(d.y()) * scale;
     } else {
         m_yaw   += float(d.x()) * 0.5f;
-        m_pitch += float(d.y()) * 0.5f;
+        m_pitch  = qBound(-89.9f, m_pitch + float(d.y()) * 0.5f, 89.9f);
     }
     updateCamera(); update(); e->accept();
 }
