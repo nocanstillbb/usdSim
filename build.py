@@ -39,6 +39,8 @@ def main():
     build_lib = str(build_dir.resolve() / "lib")
 
     conda_python = str(Path(conda_prefix) / "bin" / "python3") if conda_prefix else ""
+    qt_plugin_path = str(Path(conda_prefix) / "lib" / "qt6" / "plugins") if conda_prefix else ""
+    qml_import_path = str(Path(conda_prefix) / "lib" / "qt6" / "qml") if conda_prefix else ""
 
     env_py.write_text('''\
 #!/usr/bin/env python3
@@ -56,8 +58,19 @@ import os, sys
 _PATHS = ''' + repr([build_lib, pxr_python]) + '''
 _LD_PATHS = ''' + repr([p for p in [conda_lib, pxr_lib, build_lib] if p]) + '''
 _CONDA_PYTHON = ''' + repr(conda_python) + '''
+_QT_PLUGIN_PATH = ''' + repr(qt_plugin_path) + '''
+_QML_IMPORT_PATH = ''' + repr(qml_import_path) + '''
 
-# 0. Re-exec with the build-time Python if running a different interpreter
+# 0. Set Qt environment variables if needed
+if _QT_PLUGIN_PATH and os.path.isdir(_QT_PLUGIN_PATH):
+    os.environ.setdefault("QT_PLUGIN_PATH", _QT_PLUGIN_PATH)
+if _QML_IMPORT_PATH and os.path.isdir(_QML_IMPORT_PATH):
+    os.environ.setdefault("QML2_IMPORT_PATH", _QML_IMPORT_PATH)
+_FONTCONFIG_PATH = os.path.join(os.path.dirname(_QT_PLUGIN_PATH), '..', 'etc', 'fonts') if _QT_PLUGIN_PATH else ''
+if _FONTCONFIG_PATH and os.path.isdir(_FONTCONFIG_PATH):
+    os.environ.setdefault("FONTCONFIG_PATH", _FONTCONFIG_PATH)
+
+# 0b. Re-exec with the build-time Python if running a different interpreter
 if _CONDA_PYTHON and os.path.exists(_CONDA_PYTHON) and os.path.realpath(sys.executable) != os.path.realpath(_CONDA_PYTHON):
     os.execv(_CONDA_PYTHON, [_CONDA_PYTHON] + sys.argv)
 
