@@ -2546,6 +2546,7 @@ void UsdViewportItem::wheelEvent(QWheelEvent *e)
 void UsdViewportItem::geometryChange(const QRectF &n, const QRectF &o)
 {
     QQuickRhiItem::geometryChange(n, o);
+    m_meshDirty = true;
     updateCamera(); update();
 }
 
