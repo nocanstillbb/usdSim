@@ -16,7 +16,11 @@ find_package(pxr REQUIRED usd stage usdGeom usdLux usdUtils sdf tf vt gf ar boos
 include_directories( "${PXR_INCLUDE_DIRS}"
                      "$ENV{CONDA_PREFIX}/include/python3.11"
                      "${CMAKE_SOURCE_DIR}/src")
-set(OPENUSD_links    $ENV{CONDA_PREFIX}/lib/libpython3.11.so)
+if(APPLE)
+    set(OPENUSD_links "$ENV{CONDA_PREFIX}/lib/libpython3.11.dylib")
+else()
+    set(OPENUSD_links "$ENV{CONDA_PREFIX}/lib/libpython3.11.so")
+endif()
 
 add_subdirectory(third_party/playqmlright)
 add_subdirectory(third_party/prism_all)
@@ -98,8 +102,18 @@ target_link_libraries(usdSimLib PUBLIC
     ${PXR_ar_LIBRARY}
     ${PXR_boost_LIBRARY}
     ${PXR_python_LIBRARY}
-    ${OPENUSD_links}
 )
+
+# On macOS the python3 executable embeds the runtime statically; linking
+# libpython3.11.dylib here would create a second _PyRuntime in the process
+# and crash pybind11 when the module is imported. Use dynamic_lookup so
+# Python symbols are resolved from the already-running interpreter instead.
+# On Linux, libpython is a proper shared lib and is safe to link explicitly.
+if(APPLE)
+    target_link_options(usdSimLib PUBLIC -undefined dynamic_lookup)
+else()
+    target_link_libraries(usdSimLib PUBLIC ${OPENUSD_links})
+endif()
 
 # ---- Executable: usdSim ----
 qt_add_executable(usdSim src/main.cpp)
@@ -115,7 +129,7 @@ set_target_properties(usdSim PROPERTIES
     BUILD_RPATH   "${USD_INSTALL_DIR}/lib"
 )
 
-target_link_libraries(usdSim PRIVATE usdSimLib)
+target_link_libraries(usdSim PRIVATE usdSimLib ${OPENUSD_links})
 
 # ---- pybind11 module: pyusdSim ----
 find_package(pybind11 QUIET)

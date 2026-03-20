@@ -2,7 +2,7 @@
 name = "usdSim"
 version = "0.1.0"
 channels = ["conda-forge"]
-platforms = ["linux-64"]
+platforms = ["linux-64", "osx-arm64"]
 
 [dependencies]
 python = "3.11.*"
@@ -12,12 +12,15 @@ cmake = ">=3.16"
 ninja = "*"
 cxx-compiler = "*"
 pkg-config = "*"
+pybind11 = "*"
+
+# Linux-only: OpenGL dev headers and X11 (macOS provides these via system frameworks)
+[target.linux-64.dependencies]
 libgl-devel = "*"
 libglx-devel = "*"
 libegl-devel = "*"
 xorg-libx11 = "*"
 xorg-libxext = "*"
-pybind11 = "*"
 
 [tasks.build]
 cmd = "python build.py {{ pxr_dir }}"
