@@ -10,6 +10,7 @@ ApplicationWindow {
     visible: true
     title: doc.isOpen ? ("USD 浏览器 — " + doc.filePath) : "USD 浏览器"
     color: "black"
+    font.family: AppStyle.fontFamily
 
     // ── 数据模型 ──────────────────────────────────────────────
     UsdDocument {
@@ -117,7 +118,7 @@ ApplicationWindow {
                     text: modelData.label
                     enabled: modelData.enabled
                     flat: true
-                    contentItem: Text { text: parent.text; color: parent.enabled ? "#cccccc" : "#555555"; font.pixelSize: 13 }
+                    contentItem: Text { text: parent.text; color: parent.enabled ? "#cccccc" : "#555555"; font.family: AppStyle.fontFamily; font.pixelSize: 13 }
                     background: Rectangle { color: parent.hovered ? "#333333" : "transparent"; radius: 4 }
                     onClicked: modelData.action()
                 }
@@ -129,7 +130,7 @@ ApplicationWindow {
                 text: "撤销"
                 enabled: doc.undoStack ? doc.undoStack.canUndo : false
                 flat: true
-                contentItem: Text { text: parent.text; color: parent.enabled ? "#cccccc" : "#555555"; font.pixelSize: 13 }
+                contentItem: Text { text: parent.text; color: parent.enabled ? "#cccccc" : "#555555"; font.family: AppStyle.fontFamily; font.pixelSize: 13 }
                 background: Rectangle { color: parent.hovered && parent.enabled ? "#333333" : "transparent"; radius: 4 }
                 onClicked: doc.undo()
             }
@@ -137,7 +138,7 @@ ApplicationWindow {
                 text: "重做"
                 enabled: doc.undoStack ? doc.undoStack.canRedo : false
                 flat: true
-                contentItem: Text { text: parent.text; color: parent.enabled ? "#cccccc" : "#555555"; font.pixelSize: 13 }
+                contentItem: Text { text: parent.text; color: parent.enabled ? "#cccccc" : "#555555"; font.family: AppStyle.fontFamily; font.pixelSize: 13 }
                 background: Rectangle { color: parent.hovered && parent.enabled ? "#333333" : "transparent"; radius: 4 }
                 onClicked: doc.redo()
             }
@@ -223,7 +224,7 @@ ApplicationWindow {
                                     anchors.centerIn: parent
                                     text: modelData.label
                                     color: rightTabBar.currentIndex === modelData.idx ? "#cccccc" : "#888888"
-                                    font.pixelSize: 11
+                                    font.family: AppStyle.fontFamily; font.pixelSize: 11
                                 }
                                 MouseArea {
                                     id: tabItemMouse
@@ -270,11 +271,11 @@ ApplicationWindow {
         height: 22; color: "#007acc"
         RowLayout {
             anchors { fill: parent; leftMargin: 8; rightMargin: 8 }
-            Label { id: statusText; text: "就绪"; color: "white"; font.pixelSize: 11 }
+            Label { id: statusText; text: "就绪"; color: "white"; font.family: AppStyle.fontFamily; font.pixelSize: 11 }
             Item { Layout.fillWidth: true }
             Label {
                 text: doc.isOpen ? (doc.primPaths.length + " 个 Prim") : ""
-                color: "white"; font.pixelSize: 11
+                color: "white"; font.family: AppStyle.fontFamily; font.pixelSize: 11
             }
         }
     }

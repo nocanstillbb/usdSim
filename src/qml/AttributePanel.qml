@@ -89,10 +89,10 @@ Rectangle {
                     text: panel.selectedPrimPaths.length > 1
                         ? (panel.selectedPrimPaths.length + " 个 Prim 已选中")
                         : (panel.selectedPrimPath !== "" ? panel.selectedPrimPath : "未选中 Prim")
-                    color: "#cccccc"; font.bold: true; font.pixelSize: 11
+                    color: "#cccccc"; font.bold: true; font.family: AppStyle.fontFamily; font.pixelSize: 11
                     elide: Text.ElideLeft; Layout.fillWidth: true
                 }
-                Label { text: panel._primTypeText; color: "#888888"; font.pixelSize: 11 }
+                Label { text: panel._primTypeText; color: "#888888"; font.family: AppStyle.fontFamily; font.pixelSize: 11 }
             }
         }
 
@@ -110,7 +110,7 @@ Rectangle {
                 Label {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left; anchors.leftMargin: 6
-                    text: "属性名"; color: "#888888"; font.pixelSize: 10
+                    text: "属性名"; color: "#888888"; font.family: AppStyle.fontFamily; font.pixelSize: 10
                 }
             }
 
@@ -122,7 +122,7 @@ Rectangle {
                 Label {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left; anchors.leftMargin: 4
-                    text: "类型"; color: "#888888"; font.pixelSize: 10
+                    text: "类型"; color: "#888888"; font.family: AppStyle.fontFamily; font.pixelSize: 10
                 }
                 // Left resize handle (between name and type)
                 MouseArea {
@@ -153,7 +153,7 @@ Rectangle {
                 Label {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left; anchors.leftMargin: 4
-                    text: "值"; color: "#888888"; font.pixelSize: 10
+                    text: "值"; color: "#888888"; font.family: AppStyle.fontFamily; font.pixelSize: 10
                 }
                 // Left resize handle (between type and value)
                 MouseArea {
@@ -189,7 +189,7 @@ Rectangle {
                 anchors.topMargin: 3; anchors.bottomMargin: 3
                 placeholderText: "搜索属性..."
                 placeholderTextColor: "#555555"
-                font.pixelSize: 11; color: "#cccccc"
+                font.family: AppStyle.fontFamily; font.pixelSize: 11; color: "#cccccc"
                 rightPadding: 20
                 background: Rectangle { color: "#1e1e1e"; radius: 3; border.color: searchField.activeFocus ? "#0078d4" : "#333333" }
                 Keys.onEscapePressed: { searchField.text = ""; _scrollToSelected() }
@@ -198,7 +198,7 @@ Rectangle {
                 visible: searchField.text.length > 0
                 anchors.right: searchField.right; anchors.rightMargin: 4
                 anchors.verticalCenter: searchField.verticalCenter
-                text: "\u2715"; color: clearSearchArea.containsMouse ? "#cccccc" : "#888888"; font.pixelSize: 11
+                text: "\u2715"; color: clearSearchArea.containsMouse ? "#cccccc" : "#888888"; font.family: AppStyle.fontFamily; font.pixelSize: 11
                 MouseArea {
                     id: clearSearchArea
                     anchors.fill: parent; anchors.margins: -4
@@ -263,13 +263,13 @@ Rectangle {
                     spacing: 0
 
                     Label {
-                        text: model.name; font.pixelSize: 11
+                        text: model.name; font.family: AppStyle.fontFamily; font.pixelSize: 11
                         color: model.isCustom ? "#9cdcfe" : "#c8c8c8"
                         Layout.preferredWidth: panel._nameColWidth - 6
                         elide: Text.ElideRight; clip: true
                     }
                     Label {
-                        text: model.typeName; font.pixelSize: 10; color: "#777777"
+                        text: model.typeName; font.family: AppStyle.fontFamily; font.pixelSize: 10; color: "#777777"
                         Layout.preferredWidth: panel._typeColWidth
                         elide: Text.ElideRight; clip: true
                     }
@@ -277,7 +277,7 @@ Rectangle {
                         id: valField
                         Layout.fillWidth: true
                         readOnly: model.readOnly
-                        text: model.value; font.pixelSize: 11
+                        text: model.value; font.family: AppStyle.fontFamily; font.pixelSize: 11
                         color: model.readOnly ? "#666666" : (model.value === "mixed" ? "#888888" : "#dcdcaa")
                         font.italic: model.value === "mixed"
                         property string _name:     model.name     || ""
@@ -315,7 +315,7 @@ Rectangle {
             implicitHeight: 28
             contentItem: Text {
                 text: attrCtxDelegate.text
-                font.pixelSize: 12
+                font.family: AppStyle.fontFamily; font.pixelSize: 12
                 color: attrCtxDelegate.highlighted ? "#ffffff" : "#cccccc"
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 8; rightPadding: 8

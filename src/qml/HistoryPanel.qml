@@ -39,7 +39,7 @@ Rectangle {
                 text: "撤销"
                 enabled: panel.document.undoStack ? panel.document.undoStack.canUndo : false
                 flat: true
-                contentItem: Text { text: parent.text; color: parent.enabled ? "#cccccc" : "#555555"; font.pixelSize: 11 }
+                contentItem: Text { text: parent.text; color: parent.enabled ? "#cccccc" : "#555555"; font.family: AppStyle.fontFamily; font.pixelSize: 11 }
                 background: Rectangle { color: parent.hovered && parent.enabled ? "#333333" : "transparent"; radius: 4 }
                 onClicked: panel.document.undo()
             }
@@ -48,7 +48,7 @@ Rectangle {
                 text: "重做"
                 enabled: panel.document.undoStack ? panel.document.undoStack.canRedo : false
                 flat: true
-                contentItem: Text { text: parent.text; color: parent.enabled ? "#cccccc" : "#555555"; font.pixelSize: 11 }
+                contentItem: Text { text: parent.text; color: parent.enabled ? "#cccccc" : "#555555"; font.family: AppStyle.fontFamily; font.pixelSize: 11 }
                 background: Rectangle { color: parent.hovered && parent.enabled ? "#333333" : "transparent"; radius: 4 }
                 onClicked: panel.document.redo()
             }

@@ -73,7 +73,7 @@ Rectangle {
         visible: !panel.document.isOpen
         anchors.centerIn: parent
         text: "打开 USD 文件后在此显示 3D 场景\n拖拽旋转 · alt+拖拽平移 · 滚轮缩放"
-        color: "#555555"; font.pixelSize: 14
+        color: "#555555"; font.family: AppStyle.fontFamily; font.pixelSize: 14
         horizontalAlignment: Text.AlignHCenter
     }
 
@@ -81,7 +81,7 @@ Rectangle {
         visible: panel.document.isOpen
         anchors { top: parent.top; right: parent.right; margins: 8 }
         text: "拖拽旋转 · alt+拖拽平移 · 滚轮缩放"
-        color: "#666666"; font.pixelSize: 11
+        color: "#666666"; font.family: AppStyle.fontFamily; font.pixelSize: 11
     }
 
     Row {
@@ -116,7 +116,7 @@ Rectangle {
                         Text {
                             anchors.centerIn: parent
                             text: modelData.label
-                            font.pixelSize: 11
+                            font.family: AppStyle.fontFamily; font.pixelSize: 11
                             color: viewport.gizmoMode === modelData.mode ? "#ffffff" : "#aaaaaa"
                         }
 
@@ -159,7 +159,7 @@ Rectangle {
                     Text {
                         anchors.centerIn: parent
                         text: "网格"
-                        font.pixelSize: 11
+                        font.family: AppStyle.fontFamily; font.pixelSize: 11
                         color: viewport.showGrid ? "#ffffff" : "#aaaaaa"
                     }
 
@@ -182,7 +182,7 @@ Rectangle {
                     Text {
                         anchors.centerIn: parent
                         text: "吸附"
-                        font.pixelSize: 11
+                        font.family: AppStyle.fontFamily; font.pixelSize: 11
                         color: viewport.snapEnabled ? "#ffffff" : "#aaaaaa"
                     }
 
@@ -202,21 +202,21 @@ Rectangle {
         x: viewport.orientLabelX.x - width / 2
         y: viewport.orientLabelX.y - height / 2
         text: "X"; color: "#ff3333"
-        font.pixelSize: 11; font.bold: true
+        font.family: AppStyle.fontFamily; font.pixelSize: 11; font.bold: true
         visible: panel.document.isOpen
     }
     Text {
         x: viewport.orientLabelY.x - width / 2
         y: viewport.orientLabelY.y - height / 2
         text: "Y"; color: "#33ff33"
-        font.pixelSize: 11; font.bold: true
+        font.family: AppStyle.fontFamily; font.pixelSize: 11; font.bold: true
         visible: panel.document.isOpen
     }
     Text {
         x: viewport.orientLabelZ.x - width / 2
         y: viewport.orientLabelZ.y - height / 2
         text: "Z"; color: "#5599ff"
-        font.pixelSize: 11; font.bold: true
+        font.family: AppStyle.fontFamily; font.pixelSize: 11; font.bold: true
         visible: panel.document.isOpen
     }
 
@@ -233,7 +233,7 @@ Rectangle {
             anchors.centerIn: parent
             text: viewport.stageUnitLabel
             color: "#888888"
-            font.pixelSize: 16
+            font.family: AppStyle.fontFamily; font.pixelSize: 16
         }
     }
 

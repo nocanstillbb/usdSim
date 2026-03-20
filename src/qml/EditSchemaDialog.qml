@@ -59,7 +59,7 @@ Popup {
 
         Label {
             text: "Edit API Schema"
-            font.pixelSize: 16; font.bold: true; color: AppStyle.textWhite
+            font.family: AppStyle.fontFamily; font.pixelSize: 16; font.bold: true; color: AppStyle.textWhite
         }
         Label {
             text: {
@@ -70,17 +70,17 @@ Popup {
                 let show = paths.slice(0, 5).join("\n")
                 return n > 5 ? header + "\n" + show + "\n..." : header + "\n" + show
             }
-            color: AppStyle.textSecondary; font.pixelSize: AppStyle.fontSizeSmall
+            color: AppStyle.textSecondary; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeSmall
             Layout.fillWidth: true
         }
 
-        Label { text: "Available API Schemas"; color: AppStyle.textPrimary; font.pixelSize: 13; font.bold: true }
+        Label { text: "Available API Schemas"; color: AppStyle.textPrimary; font.family: AppStyle.fontFamily; font.pixelSize: 13; font.bold: true }
         TextField {
             id: schemaSearchField
             placeholderText: "Search schemas..."
             placeholderTextColor: AppStyle.textDisabled
             Layout.fillWidth: true; implicitHeight: AppStyle.controlHeight
-            color: AppStyle.textWhite; font.pixelSize: AppStyle.fontSize
+            color: AppStyle.textWhite; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSize
             background: Rectangle { color: AppStyle.bgInput; radius: 3; border.color: schemaSearchField.activeFocus ? AppStyle.borderFocus : AppStyle.border }
             onTextChanged: root.filterSchemas(text)
         }
@@ -108,7 +108,7 @@ Popup {
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.left: parent.left; anchors.leftMargin: 8
                         text: modelData
-                        color: AppStyle.textBright; font.pixelSize: AppStyle.fontSizeSmall
+                        color: AppStyle.textBright; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeSmall
                     }
                     MouseArea {
                         id: schemaItemArea
@@ -124,7 +124,7 @@ Popup {
             }
         }
 
-        Label { text: "Applied APIs"; color: AppStyle.textPrimary; font.pixelSize: 13; font.bold: true }
+        Label { text: "Applied APIs"; color: AppStyle.textPrimary; font.family: AppStyle.fontFamily; font.pixelSize: 13; font.bold: true }
 
         Rectangle {
             Layout.fillWidth: true
@@ -153,7 +153,7 @@ Popup {
 
                         Text {
                             text: modelData
-                            color: AppStyle.textBright; font.pixelSize: AppStyle.fontSizeSmall
+                            color: AppStyle.textBright; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeSmall
                             Layout.fillWidth: true
                             elide: Text.ElideRight
                         }
@@ -167,7 +167,7 @@ Popup {
                                 id: removeLabel
                                 anchors.centerIn: parent
                                 text: "Remove"
-                                color: "#ff8888"; font.pixelSize: AppStyle.fontSizeTiny
+                                color: "#ff8888"; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeTiny
                             }
                             MouseArea {
                                 id: removeArea
@@ -190,7 +190,7 @@ Popup {
             Rectangle {
                 width: closeBtnText.width + 20; height: AppStyle.controlHeight; radius: 3
                 color: closeBtnArea.containsMouse ? AppStyle.bgHover : AppStyle.bgInput
-                Text { id: closeBtnText; anchors.centerIn: parent; text: "Close"; color: AppStyle.textPrimary; font.pixelSize: AppStyle.fontSize }
+                Text { id: closeBtnText; anchors.centerIn: parent; text: "Close"; color: AppStyle.textPrimary; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSize }
                 MouseArea { id: closeBtnArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.close() }
             }
         }
