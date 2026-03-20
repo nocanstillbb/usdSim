@@ -104,11 +104,11 @@ target_link_libraries(usdSimLib PUBLIC
     ${PXR_python_LIBRARY}
 )
 
-# On macOS the python3 executable embeds the runtime statically; linking
-# libpython3.11.dylib here would create a second _PyRuntime in the process
-# and crash pybind11 when the module is imported. Use dynamic_lookup so
-# Python symbols are resolved from the already-running interpreter instead.
-# On Linux, libpython is a proper shared lib and is safe to link explicitly.
+# macOS: python3 executable embeds the runtime; explicitly linking libpython
+# here would create a second _PyRuntime → pybind11 crash on import.
+# Use -undefined dynamic_lookup so Python symbols resolve from whoever
+# provides the runtime at load time (the running interpreter OR usdSim itself).
+# On Linux, libpython is a shared lib in the process and safe to link directly.
 if(APPLE)
     target_link_options(usdSimLib PUBLIC -undefined dynamic_lookup)
 else()
@@ -130,6 +130,13 @@ set_target_properties(usdSim PROPERTIES
 )
 
 target_link_libraries(usdSim PRIVATE usdSimLib ${OPENUSD_links})
+# Qt adds -dead_strip_dylibs which drops libpython because main.cpp has no
+# direct Python symbol refs. -needed_library forces the dylib to be kept so
+# that usdSimLib's -undefined dynamic_lookup can resolve Python symbols when
+# the app runs standalone (no Python host process to supply them).
+if(APPLE AND OPENUSD_links)
+    target_link_options(usdSim PRIVATE "LINKER:-needed_library,${OPENUSD_links}")
+endif()
 
 # ---- pybind11 module: pyusdSim ----
 find_package(pybind11 QUIET)
