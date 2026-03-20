@@ -119,7 +119,7 @@ Rectangle {
 
         Rectangle {
             Layout.fillWidth: true; height: 28; color: "#252525"
-            Label { anchors.centerIn: parent; text: "Prim 列表"; color: "#aaaaaa"; font.bold: true; font.pixelSize: 11 }
+            Label { anchors.centerIn: parent; text: "Prim 列表"; color: "#aaaaaa"; font.bold: true; font.family: AppStyle.fontFamily; font.pixelSize: 11 }
         }
 
         // Column header with resize handles
@@ -130,7 +130,7 @@ Rectangle {
             Label {
                 anchors.left: parent.left; anchors.leftMargin: 8
                 anchors.verticalCenter: parent.verticalCenter
-                text: "名称"; color: "#888888"; font.pixelSize: 10
+                text: "名称"; color: "#888888"; font.family: AppStyle.fontFamily; font.pixelSize: 10
             }
 
             // Eye column header
@@ -141,7 +141,7 @@ Rectangle {
                 Label {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left
-                    text: "可视"; color: "#888888"; font.pixelSize: 10
+                    text: "可视"; color: "#888888"; font.family: AppStyle.fontFamily; font.pixelSize: 10
                 }
                 // Left resize handle
                 MouseArea {
@@ -174,7 +174,7 @@ Rectangle {
                 Label {
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.left: parent.left; anchors.leftMargin: 4
-                    text: "类型"; color: "#888888"; font.pixelSize: 10
+                    text: "类型"; color: "#888888"; font.family: AppStyle.fontFamily; font.pixelSize: 10
                 }
                 // Left resize handle
                 MouseArea {
@@ -209,7 +209,7 @@ Rectangle {
                 anchors.fill: parent
                 placeholderText: "搜索 prim..."
                 placeholderTextColor: "#555555"
-                color: "#cccccc"; font.pixelSize: 11
+                color: "#cccccc"; font.family: AppStyle.fontFamily; font.pixelSize: 11
                 leftPadding: 4; rightPadding: 20; topPadding: 0; bottomPadding: 0
                 background: Rectangle { color: "#1e1e1e"; radius: 3; border.color: searchField.activeFocus ? "#007acc" : "#3a3a3a" }
                 onTextChanged: panel._applyFilter(text)
@@ -220,7 +220,7 @@ Rectangle {
                 visible: searchField.text.length > 0
                 anchors.right: parent.right; anchors.rightMargin: 4
                 anchors.verticalCenter: parent.verticalCenter
-                text: "\u2715"; color: clearArea.containsMouse ? "#cccccc" : "#888888"; font.pixelSize: 11
+                text: "\u2715"; color: clearArea.containsMouse ? "#cccccc" : "#888888"; font.family: AppStyle.fontFamily; font.pixelSize: 11
 
                 MouseArea {
                     id: clearArea
@@ -368,7 +368,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     visible: isTreeNode && hasChildren
                     text: "▶"
-                    color: "#aaaaaa"; font.bold: true; font.pixelSize: 11
+                    color: "#aaaaaa"; font.bold: true; font.family: AppStyle.fontFamily; font.pixelSize: 11
 
                     TapHandler {
                         onSingleTapped: function(eventPoint, button) {
@@ -390,7 +390,7 @@ Rectangle {
                     width: parent.width - x - eyeColumnWidth - typeColumnWidth
                     clip: true
                     elide: Text.ElideRight
-                    color: "#aaaaaa"; font.bold: true; font.pixelSize: 11
+                    color: "#aaaaaa"; font.bold: true; font.family: AppStyle.fontFamily; font.pixelSize: 11
                     text: model.name
                 }
 
@@ -443,7 +443,7 @@ Rectangle {
                         clip: true
                         text: model.typeName
                         color: "#888888"
-                        font.pixelSize: 10
+                        font.family: AppStyle.fontFamily; font.pixelSize: 10
                     }
                 }
             }
@@ -469,33 +469,33 @@ Rectangle {
         contentItem: ColumnLayout {
             spacing: 10
 
-            Label { text: "添加 Prim"; color: AppStyle.textWhite; font.pixelSize: 14; font.bold: true }
-            Label { text: "父: " + addPrimOverlay.parentPath; color: AppStyle.textMuted; font.pixelSize: AppStyle.fontSizeSmall; elide: Text.ElideRight }
+            Label { text: "添加 Prim"; color: AppStyle.textWhite; font.family: AppStyle.fontFamily; font.pixelSize: 14; font.bold: true }
+            Label { text: "父: " + addPrimOverlay.parentPath; color: AppStyle.textMuted; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeSmall; elide: Text.ElideRight }
 
             RowLayout {
                 Layout.fillWidth: true
-                Label { text: "名称:"; color: AppStyle.textPrimary; font.pixelSize: AppStyle.fontSize; Layout.preferredWidth: 50 }
+                Label { text: "名称:"; color: AppStyle.textPrimary; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSize; Layout.preferredWidth: 50 }
                 TextField {
                     id: newPrimName; Layout.fillWidth: true; placeholderText: "MyPrim"
                     implicitHeight: AppStyle.controlHeight
-                    color: AppStyle.textPrimary; font.pixelSize: AppStyle.fontSize
+                    color: AppStyle.textPrimary; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSize
                     background: Rectangle { color: AppStyle.bgBase; radius: 4; border.color: AppStyle.border }
                 }
             }
             RowLayout {
                 Layout.fillWidth: true
-                Label { text: "类型:"; color: AppStyle.textPrimary; font.pixelSize: AppStyle.fontSize; Layout.preferredWidth: 50 }
+                Label { text: "类型:"; color: AppStyle.textPrimary; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSize; Layout.preferredWidth: 50 }
                 ComboBox {
-                    id: newPrimType; Layout.fillWidth: true; font.pixelSize: AppStyle.fontSize
+                    id: newPrimType; Layout.fillWidth: true; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSize
                     implicitHeight: AppStyle.controlHeight
                     model: ["Xform","Sphere","Cube","Cylinder","Cone","Mesh","Camera",""]
                     contentItem: Text {
                         leftPadding: 6
-                        text: newPrimType.displayText; font.pixelSize: AppStyle.fontSize
+                        text: newPrimType.displayText; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSize
                         color: AppStyle.textBright; verticalAlignment: Text.AlignVCenter
                     }
                     background: Rectangle { color: AppStyle.bgInput; radius: 3; border.color: newPrimType.activeFocus ? AppStyle.borderFocus : AppStyle.border }
-                    indicator: Text { anchors.right: parent.right; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter; text: "\u25BE"; color: AppStyle.textMuted; font.pixelSize: AppStyle.fontSizeTiny }
+                    indicator: Text { anchors.right: parent.right; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter; text: "\u25BE"; color: AppStyle.textMuted; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeTiny }
                     popup: Popup {
                         y: newPrimType.height
                         width: newPrimType.width; implicitHeight: contentItem.implicitHeight + 2; padding: 1
@@ -508,7 +508,7 @@ Rectangle {
                     }
                     delegate: ItemDelegate {
                         width: newPrimType.width; height: 24
-                        contentItem: Text { text: modelData; color: highlighted ? AppStyle.textWhite : AppStyle.textPrimary; font.pixelSize: AppStyle.fontSizeSmall; verticalAlignment: Text.AlignVCenter }
+                        contentItem: Text { text: modelData; color: highlighted ? AppStyle.textWhite : AppStyle.textPrimary; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeSmall; verticalAlignment: Text.AlignVCenter }
                         highlighted: newPrimType.highlightedIndex === index
                         background: Rectangle { color: highlighted ? AppStyle.accent : "transparent" }
                     }
@@ -519,13 +519,13 @@ Rectangle {
                 Item { Layout.fillWidth: true }
                 Button {
                     text: "取消"; flat: true
-                    contentItem: Text { text: parent.text; color: AppStyle.textSecondary; font.pixelSize: AppStyle.fontSize }
+                    contentItem: Text { text: parent.text; color: AppStyle.textSecondary; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSize }
                     background: Rectangle { color: parent.hovered ? AppStyle.bgMid : "transparent"; radius: 4 }
                     onClicked: addPrimOverlay.close()
                 }
                 Button {
                     text: "添加"
-                    contentItem: Text { text: parent.text; color: AppStyle.textWhite; font.pixelSize: AppStyle.fontSize }
+                    contentItem: Text { text: parent.text; color: AppStyle.textWhite; font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSize }
                     background: Rectangle { color: parent.hovered ? AppStyle.accentDark : AppStyle.accent; radius: 4 }
                     onClicked: {
                         let name = newPrimName.text.trim()

@@ -37,6 +37,7 @@ QtObject {
     readonly property int menuItemWidth:  180
     readonly property int menuItemHeight: 28
     readonly property int controlHeight:  26
+    readonly property string fontFamily:  "Noto Sans CJK SC"
     readonly property int fontSize:       12
     readonly property int fontSizeSmall:  11
     readonly property int fontSizeTiny:   10

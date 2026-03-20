@@ -23,12 +23,12 @@ Menu {
                 anchors.verticalCenter: parent.verticalCenter
                 text: "\u203A"
                 color: _smi.highlighted ? AppStyle.textWhite : AppStyle.textSecondary
-                font.pixelSize: 16
+                font.family: AppStyle.fontFamily; font.pixelSize: 16
                 visible: _smi.subMenu
             }
             contentItem: Text {
                 text: _smi.text
-                font.pixelSize: AppStyle.fontSize
+                font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSize
                 color: _smi.highlighted ? AppStyle.textWhite : AppStyle.textPrimary
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 8; rightPadding: 8
@@ -55,12 +55,12 @@ Menu {
             anchors.verticalCenter: parent.verticalCenter
             text: "\u203A"
             color: menuDelegate.highlighted ? AppStyle.textWhite : AppStyle.textSecondary
-            font.pixelSize: 16
+            font.family: AppStyle.fontFamily; font.pixelSize: 16
             visible: menuDelegate.subMenu
         }
         contentItem: Text {
             text: menuDelegate.text
-            font.pixelSize: AppStyle.fontSize
+            font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSize
             color: menuDelegate.highlighted ? AppStyle.textWhite : AppStyle.textPrimary
             verticalAlignment: Text.AlignVCenter
             leftPadding: 8; rightPadding: 8

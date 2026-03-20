@@ -3,6 +3,7 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
+#include <QFont>
 #include <InspectorServer.h>
 #include "UsdDocument.h"
 #include "UsdViewportItem.h"
@@ -38,6 +39,8 @@ void UsdSimApp::init(int argc, char *argv[])
     m_argv[argc] = nullptr;
 
     m_app = new QApplication(m_argc, m_argv.get());
+    QFont defaultFont(QStringLiteral("Noto Sans CJK SC"));
+    m_app->setFont(defaultFont);
     QQuickStyle::setStyle("Basic");
 
     m_engine = new QQmlApplicationEngine();
