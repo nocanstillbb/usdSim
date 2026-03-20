@@ -69,6 +69,7 @@ private:
         QVector3D  color;
         QVector3D  centroid;
         bool lineOnly = false;
+        bool isLightGizmo = false;
     };
 
     void destroyMeshes();
@@ -454,6 +455,181 @@ static void genHemisphere(float r, QVector<float> &v, QVector<quint32> &idx)
     }
     for (int i = 0; i < sectors; i++)
         idx << base << base+i+2 << base+i+1;
+}
+
+// Line-only gizmo for SphereLight:
+// 3 great circles in XY, XZ, YZ planes.
+// Indices are line pairs (for GL_LINES topology).
+static void genSphereLightGizmo(float radius, QVector<float> &v, QVector<quint32> &idx)
+{
+    const int segs = 36;
+    v.clear(); idx.clear();
+
+    auto addVert = [&](float x, float y, float z) -> quint32 {
+        quint32 i = v.size() / 6;
+        v << x << y << z << 0.f << 0.f << 0.f;
+        return i;
+    };
+
+    // XY plane circle (horizontal at equator)
+    QVector<quint32> xyVerts;
+    for (int i = 0; i < segs; i++) {
+        float t = 2.f * float(M_PI) * i / segs;
+        xyVerts << addVert(cosf(t) * radius, sinf(t) * radius, 0.f);
+    }
+    for (int i = 0; i < segs; i++)
+        idx << xyVerts[i] << xyVerts[(i + 1) % segs];
+
+    // XZ plane circle (vertical, front-back)
+    QVector<quint32> xzVerts;
+    for (int i = 0; i < segs; i++) {
+        float t = 2.f * float(M_PI) * i / segs;
+        xzVerts << addVert(cosf(t) * radius, 0.f, sinf(t) * radius);
+    }
+    for (int i = 0; i < segs; i++)
+        idx << xzVerts[i] << xzVerts[(i + 1) % segs];
+
+    // YZ plane circle (vertical, left-right)
+    QVector<quint32> yzVerts;
+    for (int i = 0; i < segs; i++) {
+        float t = 2.f * float(M_PI) * i / segs;
+        yzVerts << addVert(0.f, cosf(t) * radius, sinf(t) * radius);
+    }
+    for (int i = 0; i < segs; i++)
+        idx << yzVerts[i] << yzVerts[(i + 1) % segs];
+}
+
+// Line-only gizmo for DistantLight:
+// Wireframe cone pointing along -Z (USD light emission axis) with rays.
+// Indices are line pairs (for GL_LINES topology).
+static void genDistantLightGizmo(float radius, float height,
+                                  QVector<float> &v, QVector<quint32> &idx)
+{
+    const int segs = 36;
+    const int rays = 8;
+    v.clear(); idx.clear();
+
+    auto addVert = [&](float x, float y, float z) -> quint32 {
+        quint32 i = v.size() / 6;
+        v << x << y << z << 0.f << 0.f << -1.f;
+        return i;
+    };
+
+    // Base circle at Z=0 (in XY plane)
+    QVector<quint32> circleVerts;
+    for (int i = 0; i < segs; i++) {
+        float t = 2.f * float(M_PI) * i / segs;
+        circleVerts << addVert(cosf(t) * radius, sinf(t) * radius, 0.f);
+    }
+    // Circle edges
+    for (int i = 0; i < segs; i++)
+        idx << circleVerts[i] << circleVerts[(i + 1) % segs];
+
+    // Apex at -Z (emission direction)
+    quint32 apex = addVert(0.f, 0.f, -height);
+
+    // Lines from circle to apex
+    for (int i = 0; i < rays; i++) {
+        int ci = i * (segs / rays);
+        idx << circleVerts[ci] << apex;
+    }
+}
+
+// Line-only gizmo for DomeLight:
+// Wireframe hemisphere: 3 parallels + 4 meridians + base circle.
+// Indices are line pairs (for GL_LINES topology).
+static void genDomeLightGizmo(float radius, QVector<float> &v, QVector<quint32> &idx)
+{
+    const int segs = 36;
+    v.clear(); idx.clear();
+
+    auto addVert = [&](float x, float y, float z) -> quint32 {
+        quint32 i = v.size() / 6;
+        v << x << y << z << 0.f << 1.f << 0.f;
+        return i;
+    };
+
+    // Base circle at Y=0 (in XZ plane)
+    QVector<quint32> baseVerts;
+    for (int i = 0; i < segs; i++) {
+        float t = 2.f * float(M_PI) * i / segs;
+        baseVerts << addVert(cosf(t) * radius, 0.f, sinf(t) * radius);
+    }
+    for (int i = 0; i < segs; i++)
+        idx << baseVerts[i] << baseVerts[(i + 1) % segs];
+
+    // 3 parallel circles at phi = 22.5°, 45°, 67.5°
+    const float phiAngles[] = { float(M_PI) * 0.125f, float(M_PI) * 0.25f, float(M_PI) * 0.375f };
+    for (float phi : phiAngles) {
+        float rr = cosf(phi) * radius;
+        float yy = sinf(phi) * radius;
+        QVector<quint32> pVerts;
+        for (int i = 0; i < segs; i++) {
+            float t = 2.f * float(M_PI) * i / segs;
+            pVerts << addVert(cosf(t) * rr, yy, sinf(t) * rr);
+        }
+        for (int i = 0; i < segs; i++)
+            idx << pVerts[i] << pVerts[(i + 1) % segs];
+    }
+
+    // 4 meridian semicircles: each goes from base point at θ, over the pole, to
+    // the opposite base point at θ+π.  Distributed every 45° around Y axis.
+    const int halfSegs = segs / 2;
+    const float meridianAngles[] = { 0.f, float(M_PI) * 0.25f, float(M_PI) * 0.5f, float(M_PI) * 0.75f };
+    for (float theta : meridianAngles) {
+        float cx = cosf(theta), cz = sinf(theta);
+        QVector<quint32> mVerts;
+        for (int i = 0; i <= halfSegs; i++) {
+            float phi = float(M_PI) * i / halfSegs; // 0..π (full semicircle)
+            float rr = cosf(phi) * radius;
+            float yy = sinf(phi) * radius;
+            mVerts << addVert(cx * rr, yy, cz * rr);
+        }
+        for (int i = 0; i < halfSegs; i++)
+            idx << mVerts[i] << mVerts[i + 1];
+    }
+}
+
+// Line-only gizmo for CylinderLight:
+// Two circles (top/bottom caps) + vertical lines connecting them.
+// Indices are line pairs (for GL_LINES topology).
+static void genCylinderLightGizmo(float radius, float length,
+                                   QVector<float> &v, QVector<quint32> &idx)
+{
+    const int segs = 36;
+    const int vertLines = 8;
+    float h = length * 0.5f;
+    v.clear(); idx.clear();
+
+    auto addVert = [&](float x, float y, float z) -> quint32 {
+        quint32 i = v.size() / 6;
+        v << x << y << z << 0.f << 0.f << 0.f;
+        return i;
+    };
+
+    // Top circle at Y=+h
+    QVector<quint32> topVerts;
+    for (int i = 0; i < segs; i++) {
+        float t = 2.f * float(M_PI) * i / segs;
+        topVerts << addVert(cosf(t) * radius, h, sinf(t) * radius);
+    }
+    for (int i = 0; i < segs; i++)
+        idx << topVerts[i] << topVerts[(i + 1) % segs];
+
+    // Bottom circle at Y=-h
+    QVector<quint32> botVerts;
+    for (int i = 0; i < segs; i++) {
+        float t = 2.f * float(M_PI) * i / segs;
+        botVerts << addVert(cosf(t) * radius, -h, sinf(t) * radius);
+    }
+    for (int i = 0; i < segs; i++)
+        idx << botVerts[i] << botVerts[(i + 1) % segs];
+
+    // Vertical lines connecting top and bottom
+    for (int i = 0; i < vertLines; i++) {
+        int ci = i * (segs / vertLines);
+        idx << topVerts[ci] << botVerts[ci];
+    }
 }
 
 static void genCameraFrustum(QVector<float> &v, QVector<quint32> &idx)
@@ -1270,20 +1446,25 @@ void UsdViewportItem::buildMeshes()
 
     int meshColorIndex = 0;
     for (const UsdPrim &prim : stage->Traverse(UsdTraverseInstanceProxies())) {
-        // Skip prims whose computed visibility is "invisible"
+        const TfToken type = prim.GetTypeName();
+        bool isLightType = (type == "SphereLight" || type == "RectLight" ||
+                            type == "DiskLight"   || type == "CylinderLight" ||
+                            type == "DistantLight" || type == "DomeLight");
+
+        // Check visibility — light prims are still built (for selection/gizmo)
+        // even when invisible, but non-light prims are skipped.
         UsdGeomImageable img(prim);
-        if (img && img.ComputeVisibility() == UsdGeomTokens->invisible)
+        bool primInvisible = img && img.ComputeVisibility() == UsdGeomTokens->invisible;
+        if (primInvisible && !isLightType)
             continue;
 
         // Skip prims with purpose != "default" (e.g. "guide" collision shapes, "proxy", "render")
-        if (img) {
+        if (img && !isLightType) {
             TfToken purpose;
             img.GetPurposeAttr().Get(&purpose);
             if (!purpose.IsEmpty() && purpose != UsdGeomTokens->default_)
                 continue;
         }
-
-        const TfToken type = prim.GetTypeName();
 
         QVector<float>   verts;
         QVector<quint32> indices;
@@ -1335,7 +1516,8 @@ void UsdViewportItem::buildMeshes()
         } else if (type == "SphereLight") {
             double r = 0.5;
             UsdLuxSphereLight(prim).GetRadiusAttr().Get(&r);
-            genSphere(float(r), verts, indices);
+            genSphereLightGizmo(float(r), verts, indices);
+            isLineOnly = true;
         } else if (type == "RectLight") {
             float w = 1.0f, h = 1.0f;
             UsdLuxRectLight rectLight(prim);
@@ -1363,27 +1545,20 @@ void UsdViewportItem::buildMeshes()
             genDiskLightGizmo(r, verts, indices);
             isLineOnly = true;
         } else if (type == "CylinderLight") {
-            float ps = 1.f / m_unitScale;
-            genCylinder(0.5f * ps, 1.0f * ps, verts, indices);
+            float r = 0.5f, len = 1.0f;
+            UsdLuxCylinderLight cylLight(prim);
+            cylLight.GetRadiusAttr().Get(&r);
+            cylLight.GetLengthAttr().Get(&len);
+            genCylinderLightGizmo(r, len, verts, indices);
+            isLineOnly = true;
         } else if (type == "DistantLight") {
-            // Visual indicator: cone pointing along local -Z (USD light emission axis)
             float ps = 1.f / m_unitScale;
-            genCone(0.3f * ps, 0.6f * ps, verts, indices);
-            // Rotate from Y-up to -Z: (x,y,z) → (x,z,-y), same for normals
-            {
-                float *d = verts.data();
-                int count = verts.size() / 6;
-                for (int vi = 0; vi < count; ++vi) {
-                    float *p = d + vi * 6;
-                    float oy = p[1], oz = p[2];
-                    p[1] = oz; p[2] = -oy;
-                    float ny = p[4], nz = p[5];
-                    p[4] = nz; p[5] = -ny;
-                }
-            }
+            genDistantLightGizmo(0.3f * ps, 0.6f * ps, verts, indices);
+            isLineOnly = true;
         } else if (type == "DomeLight") {
             float ps = 1.f / m_unitScale;
-            genHemisphere(1.0f * ps, verts, indices);
+            genDomeLightGizmo(1.0f * ps, verts, indices);
+            isLineOnly = true;
 
         // ── Camera ──
         } else if (type == "Camera") {
@@ -1405,6 +1580,7 @@ void UsdViewportItem::buildMeshes()
         bool isLight = (type == "SphereLight" || type == "RectLight" ||
                         type == "DiskLight"   || type == "CylinderLight" ||
                         type == "DistantLight" || type == "DomeLight");
+        md.isLightGizmo = isLight;
         if (isLight) {
             md.color = lightColor;
         } else if (type == "Camera") {
@@ -1523,8 +1699,13 @@ void UsdViewportItem::buildMeshes()
                 UsdLuxDiskLight(prim).GetRadiusAttr().Get(&r);
                 radiusScene = r;
                 areaScene = float(M_PI) * radiusScene * radiusScene;
+            } else if (type == "CylinderLight") {
+                float r = 0.5f, len = 1.0f;
+                UsdLuxCylinderLight(prim).GetRadiusAttr().Get(&r);
+                UsdLuxCylinderLight(prim).GetLengthAttr().Get(&len);
+                radiusScene = r;
+                areaScene = 2.f * float(M_PI) * r * len; // lateral surface area
             } else {
-                // CylinderLight etc.
                 areaScene = float(M_PI) * radiusScene * radiusScene;
             }
             ld.radius = radiusScene * m_unitScale;
@@ -2668,6 +2849,7 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
     dst.transform  = src.transform;
     dst.color      = src.color;
     dst.lineOnly   = src.lineOnly;
+    dst.isLightGizmo = src.isLightGizmo;
 
     // Compute centroid from vertices (model space)
     {
@@ -3212,23 +3394,27 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
     }
 
     if (m_pipeline) {
-    // Draw solid (triangle) meshes
+    // Draw solid (triangle) meshes — skip light gizmos unless selected
     cb->setGraphicsPipeline(m_pipeline);
     cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
-    for (auto &m : m_meshes) {
+    for (int i = 0; i < m_meshes.size(); ++i) {
+        auto &m = m_meshes[i];
         if (m.lineOnly) continue;
+        if (m.isLightGizmo && !m_selectedIndices.contains(i)) continue;
         cb->setShaderResources(m.srb);
         QRhiCommandBuffer::VertexInput vi(m.vbuf, 0);
         cb->setVertexInput(0, 1, &vi, m.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
         cb->drawIndexed(m.indexCount);
     }
 
-    // Draw line-only meshes (light gizmo wireframes)
+    // Draw line-only meshes (light gizmo wireframes) — only when selected
     if (m_lineMeshPipeline) {
         cb->setGraphicsPipeline(m_lineMeshPipeline);
         cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
-        for (auto &m : m_meshes) {
+        for (int i = 0; i < m_meshes.size(); ++i) {
+            auto &m = m_meshes[i];
             if (!m.lineOnly) continue;
+            if (m.isLightGizmo && !m_selectedIndices.contains(i)) continue;
             cb->setShaderResources(m.srb);
             QRhiCommandBuffer::VertexInput vi(m.vbuf, 0);
             cb->setVertexInput(0, 1, &vi, m.ibuf, 0, QRhiCommandBuffer::IndexUInt32);

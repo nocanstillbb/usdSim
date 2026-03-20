@@ -17,6 +17,7 @@ struct MeshData {
     QVector3D        color;
     QString          primPath;
     bool             lineOnly = false; // true = render with Lines topology (light gizmos)
+    bool             isLightGizmo = false; // true = only draw when selected
 };
 
 enum GizmoMode {
