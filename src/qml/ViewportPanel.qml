@@ -198,58 +198,72 @@ Rectangle {
         }
     }
 
-    // Collision display mode toggle
+    // Collision display mode
     Row {
         visible: panel.document.isOpen
         anchors { top: parent.top; left: parent.left; topMargin: 68; leftMargin: 8 }
-        spacing: 1
+        spacing: 4
 
         Rectangle {
-            width: collisionRow.width + 4
-            height: collisionRow.height + 4
+            width: colLabel.width + colCombo.width + 12
+            height: AppStyle.controlHeight
             radius: 4
             color: "#cc1e1e1e"
 
             Row {
-                id: collisionRow
                 anchors.centerIn: parent
-                spacing: 1
+                spacing: 4
 
                 Text {
+                    id: colLabel
                     anchors.verticalCenter: parent.verticalCenter
                     text: "碰撞"
-                    font.family: AppStyle.fontFamily; font.pixelSize: 11
-                    color: "#888888"
-                    leftPadding: 4; rightPadding: 2
+                    font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeSmall
+                    color: AppStyle.textMuted
                 }
 
-                Repeater {
-                    model: [
-                        { label: "隐藏", mode: 0 },
-                        { label: "选中", mode: 1 },
-                        { label: "全部", mode: 2 }
-                    ]
-                    delegate: Rectangle {
-                        width: 44; height: 24
-                        radius: 3
-                        color: viewport.collisionDisplayMode === modelData.mode
-                            ? (modelData.mode > 0 ? "#2e7d32" : "#555555")
-                            : colArea.containsMouse ? "#40ffffff" : "transparent"
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: modelData.label
-                            font.family: AppStyle.fontFamily; font.pixelSize: 11
-                            color: viewport.collisionDisplayMode === modelData.mode ? "#ffffff" : "#aaaaaa"
+                ComboBox {
+                    id: colCombo
+                    width: 72
+                    implicitHeight: AppStyle.controlHeight - 4
+                    font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeSmall
+                    model: ["隐藏", "选中", "全部"]
+                    currentIndex: viewport.collisionDisplayMode
+                    onCurrentIndexChanged: viewport.collisionDisplayMode = currentIndex
+                    contentItem: Text {
+                        leftPadding: 6
+                        text: colCombo.displayText
+                        font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeSmall
+                        color: AppStyle.textBright; verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        color: AppStyle.bgInput; radius: 3
+                        border.color: colCombo.activeFocus ? AppStyle.borderFocus : AppStyle.border
+                    }
+                    indicator: Text {
+                        anchors.right: parent.right; anchors.rightMargin: 6
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "\u25BE"; color: AppStyle.textMuted
+                        font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeTiny
+                    }
+                    popup: Popup {
+                        y: colCombo.height
+                        width: colCombo.width; implicitHeight: contentItem.implicitHeight + 2; padding: 1
+                        background: Rectangle { color: AppStyle.bgWidget; border.color: AppStyle.border; radius: 3 }
+                        contentItem: ListView {
+                            clip: true; implicitHeight: contentHeight
+                            model: colCombo.delegateModel
                         }
-
-                        MouseArea {
-                            id: colArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: viewport.collisionDisplayMode = modelData.mode
+                    }
+                    delegate: ItemDelegate {
+                        width: colCombo.width; height: 24
+                        contentItem: Text {
+                            text: modelData; verticalAlignment: Text.AlignVCenter
+                            font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeSmall
+                            color: highlighted ? AppStyle.textWhite : AppStyle.textPrimary
                         }
+                        highlighted: colCombo.highlightedIndex === index
+                        background: Rectangle { color: highlighted ? AppStyle.accent : "transparent" }
                     }
                 }
             }
