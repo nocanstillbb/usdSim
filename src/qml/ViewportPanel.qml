@@ -84,22 +84,23 @@ Rectangle {
         color: "#666666"; font.family: AppStyle.fontFamily; font.pixelSize: 11
     }
 
-    Row {
+    // ── Viewport toolbar: Gizmo | Display | Collision ──
+    Rectangle {
         visible: panel.document.isOpen
         anchors { top: parent.top; left: parent.left; margins: 8 }
-        spacing: 1
+        width: toolbarRow.width + 8
+        height: toolbarRow.height + 4
+        radius: 4
+        color: "#cc1e1e1e"
 
-        Rectangle {
-            width: childRow.width + 4
-            height: childRow.height + 4
-            radius: 4
-            color: "#cc1e1e1e"
+        Row {
+            id: toolbarRow
+            anchors.centerIn: parent
+            spacing: 0
 
+            // ── Section 1: Gizmo mode ──
             Row {
-                id: childRow
-                anchors.centerIn: parent
                 spacing: 1
-
                 Repeater {
                     model: [
                         { label: "移动", mode: 1 },
@@ -107,132 +108,81 @@ Rectangle {
                         { label: "缩放", mode: 3 }
                     ]
                     delegate: Rectangle {
-                        width: 56; height: 24
-                        radius: 3
+                        width: 48; height: 24; radius: 3
                         color: viewport.gizmoMode === modelData.mode
-                            ? "#0078d4"
+                            ? AppStyle.accent
                             : toolArea.containsMouse ? "#40ffffff" : "transparent"
-
                         Text {
-                            anchors.centerIn: parent
-                            text: modelData.label
-                            font.family: AppStyle.fontFamily; font.pixelSize: 11
-                            color: viewport.gizmoMode === modelData.mode ? "#ffffff" : "#aaaaaa"
+                            anchors.centerIn: parent; text: modelData.label
+                            font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeSmall
+                            color: viewport.gizmoMode === modelData.mode ? AppStyle.textWhite : AppStyle.textSecondary
                         }
-
                         MouseArea {
-                            id: toolArea
-                            anchors.fill: parent
-                            hoverEnabled: true
+                            id: toolArea; anchors.fill: parent; hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: viewport.gizmoMode = (viewport.gizmoMode === modelData.mode) ? 0 : modelData.mode
                         }
                     }
                 }
             }
-        }
-    }
 
-    Row {
-        visible: panel.document.isOpen
-        anchors { top: parent.top; left: parent.left; topMargin: 38; leftMargin: 8 }
-        spacing: 1
+            // Divider
+            Rectangle { width: 1; height: 16; color: AppStyle.border; anchors.verticalCenter: parent.verticalCenter
+                        Layout.leftMargin: 4; Layout.rightMargin: 4 }
+            Item { width: 6; height: 1 }
 
-        Rectangle {
-            width: gridSnapRow.width + 4
-            height: gridSnapRow.height + 4
-            radius: 4
-            color: "#cc1e1e1e"
-
+            // ── Section 2: Grid & Snap ──
             Row {
-                id: gridSnapRow
-                anchors.centerIn: parent
                 spacing: 1
-
-                Rectangle {
-                    width: 56; height: 24
-                    radius: 3
-                    color: viewport.showGrid
-                        ? "#0078d4"
-                        : gridArea.containsMouse ? "#40ffffff" : "transparent"
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: "网格"
-                        font.family: AppStyle.fontFamily; font.pixelSize: 11
-                        color: viewport.showGrid ? "#ffffff" : "#aaaaaa"
-                    }
-
-                    MouseArea {
-                        id: gridArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: viewport.showGrid = !viewport.showGrid
-                    }
-                }
-
-                Rectangle {
-                    width: 56; height: 24
-                    radius: 3
-                    color: viewport.snapEnabled
-                        ? "#0078d4"
-                        : snapArea.containsMouse ? "#40ffffff" : "transparent"
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: "吸附"
-                        font.family: AppStyle.fontFamily; font.pixelSize: 11
-                        color: viewport.snapEnabled ? "#ffffff" : "#aaaaaa"
-                    }
-
-                    MouseArea {
-                        id: snapArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: viewport.snapEnabled = !viewport.snapEnabled
+                Repeater {
+                    model: [
+                        { label: "网格", prop: "showGrid" },
+                        { label: "吸附", prop: "snapEnabled" }
+                    ]
+                    delegate: Rectangle {
+                        width: 48; height: 24; radius: 3
+                        property bool active: modelData.prop === "showGrid" ? viewport.showGrid : viewport.snapEnabled
+                        color: active ? AppStyle.accent
+                             : dispArea.containsMouse ? "#40ffffff" : "transparent"
+                        Text {
+                            anchors.centerIn: parent; text: modelData.label
+                            font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeSmall
+                            color: parent.active ? AppStyle.textWhite : AppStyle.textSecondary
+                        }
+                        MouseArea {
+                            id: dispArea; anchors.fill: parent; hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (modelData.prop === "showGrid") viewport.showGrid = !viewport.showGrid
+                                else viewport.snapEnabled = !viewport.snapEnabled
+                            }
+                        }
                     }
                 }
             }
-        }
-    }
 
-    // Collision display mode
-    Row {
-        visible: panel.document.isOpen
-        anchors { top: parent.top; left: parent.left; topMargin: 68; leftMargin: 8 }
-        spacing: 4
+            // Divider
+            Item { width: 6; height: 1 }
+            Rectangle { width: 1; height: 16; color: AppStyle.border; anchors.verticalCenter: parent.verticalCenter }
+            Item { width: 6; height: 1 }
 
-        Rectangle {
-            width: colLabel.width + colCombo.width + 12
-            height: AppStyle.controlHeight
-            radius: 4
-            color: "#cc1e1e1e"
-
+            // ── Section 3: Collision display ──
             Row {
-                anchors.centerIn: parent
                 spacing: 4
-
                 Text {
-                    id: colLabel
                     anchors.verticalCenter: parent.verticalCenter
-                    text: "碰撞"
+                    text: "碰撞"; color: AppStyle.textMuted
                     font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeSmall
-                    color: AppStyle.textMuted
                 }
-
                 ComboBox {
                     id: colCombo
-                    width: 72
-                    implicitHeight: AppStyle.controlHeight - 4
+                    width: 72; implicitHeight: 22
                     font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeSmall
                     model: ["隐藏", "选中", "全部"]
                     currentIndex: viewport.collisionDisplayMode
                     onCurrentIndexChanged: viewport.collisionDisplayMode = currentIndex
                     contentItem: Text {
-                        leftPadding: 6
-                        text: colCombo.displayText
+                        leftPadding: 6; text: colCombo.displayText
                         font.family: AppStyle.fontFamily; font.pixelSize: AppStyle.fontSizeSmall
                         color: AppStyle.textBright; verticalAlignment: Text.AlignVCenter
                     }
