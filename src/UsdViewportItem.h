@@ -20,6 +20,8 @@ struct MeshData {
     bool             isLightGizmo = false; // true = only draw when selected
     bool             isCollision = false; // true = collision-only (purpose=guide), wireframe only
     bool             hasCollisionAPI = false; // true = has PhysicsCollisionAPI, draw green wireframe overlay
+    QVector<float>   collisionWireVerts;   // sparse wireframe [x,y,z,nx,ny,nz]
+    QVector<quint32> collisionWireIndices; // line pairs
 };
 
 enum GizmoMode {

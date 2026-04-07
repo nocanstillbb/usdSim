@@ -74,6 +74,9 @@ private:
         bool hasCollisionAPI = false;
         QRhiBuffer *colUbuf = nullptr;              // collision wireframe UBO
         QRhiShaderResourceBindings *colSrb = nullptr;
+        QRhiBuffer *colVbuf = nullptr;              // sparse wireframe vertices
+        QRhiBuffer *colIbuf = nullptr;              // sparse wireframe indices
+        int colWireCount = 0;
     };
 
     void destroyMeshes();
@@ -1417,6 +1420,160 @@ void UsdViewportItem::onDocumentChanged()
     update();
 }
 
+// ================================================================
+//  Sparse collision wireframe generators (characteristic lines only)
+// ================================================================
+static void addCircle(QVector<float> &v, QVector<quint32> &idx,
+                      float r, float cx, float cy, float cz,
+                      int axis, int N = 24) // axis: 0=X,1=Y,2=Z normal
+{
+    quint32 base = v.size() / 6;
+    for (int i = 0; i < N; ++i) {
+        float a = 2.f * float(M_PI) * i / N;
+        float c = r * cosf(a), s = r * sinf(a);
+        float x = cx, y = cy, z = cz;
+        if (axis == 0)      { y += c; z += s; }
+        else if (axis == 1) { x += c; z += s; }
+        else                { x += c; y += s; }
+        v << x << y << z << 0 << 0 << 0;
+    }
+    for (int i = 0; i < N; ++i)
+        idx << base + i << base + (i + 1) % N;
+}
+
+static void genCollisionWireSphere(float r, QVector<float> &v, QVector<quint32> &idx)
+{
+    addCircle(v, idx, r, 0, 0, 0, 0);   // YZ plane
+    addCircle(v, idx, r, 0, 0, 0, 1);   // XZ plane
+    addCircle(v, idx, r, 0, 0, 0, 2);   // XY plane
+}
+
+static void genCollisionWireCube(float size, QVector<float> &v, QVector<quint32> &idx)
+{
+    float h = size * 0.5f;
+    // 8 corners
+    quint32 base = v.size() / 6;
+    float corners[][3] = {
+        {-h,-h,-h},{h,-h,-h},{h,h,-h},{-h,h,-h},
+        {-h,-h, h},{h,-h, h},{h,h, h},{-h,h, h}
+    };
+    for (auto &c : corners)
+        v << c[0] << c[1] << c[2] << 0 << 0 << 0;
+    // 12 edges
+    int edges[][2] = {
+        {0,1},{1,2},{2,3},{3,0},  // bottom
+        {4,5},{5,6},{6,7},{7,4},  // top
+        {0,4},{1,5},{2,6},{3,7}   // verticals
+    };
+    for (auto &e : edges)
+        idx << base + e[0] << base + e[1];
+}
+
+static void genCollisionWireCylinder(float r, float h, int axisUp,
+                                     QVector<float> &v, QVector<quint32> &idx)
+{
+    // top & bottom circles + 4 vertical lines
+    float halfH = h * 0.5f;
+    float lo = -halfH, hi = halfH;
+    int circleAxis = (axisUp == 0) ? 0 : (axisUp == 2) ? 2 : 1; // normal = up axis
+    float cx0 = 0, cy0 = 0, cz0 = 0;
+    float cx1 = 0, cy1 = 0, cz1 = 0;
+    if (axisUp == 0)      { cx0 = lo; cx1 = hi; }
+    else if (axisUp == 2) { cz0 = lo; cz1 = hi; }
+    else                  { cy0 = lo; cy1 = hi; }
+    addCircle(v, idx, r, cx0, cy0, cz0, circleAxis);
+    addCircle(v, idx, r, cx1, cy1, cz1, circleAxis);
+    // 4 vertical lines
+    const int N = 4;
+    for (int i = 0; i < N; ++i) {
+        float a = 2.f * float(M_PI) * i / N;
+        float c = r * cosf(a), s = r * sinf(a);
+        quint32 base = v.size() / 6;
+        float p0[3] = {0,0,0}, p1[3] = {0,0,0};
+        if (axisUp == 0)      { p0[0]=lo; p0[1]=c; p0[2]=s; p1[0]=hi; p1[1]=c; p1[2]=s; }
+        else if (axisUp == 2) { p0[0]=c; p0[1]=s; p0[2]=lo; p1[0]=c; p1[1]=s; p1[2]=hi; }
+        else                  { p0[0]=c; p0[1]=lo; p0[2]=s; p1[0]=c; p1[1]=hi; p1[2]=s; }
+        v << p0[0] << p0[1] << p0[2] << 0 << 0 << 0;
+        v << p1[0] << p1[1] << p1[2] << 0 << 0 << 0;
+        idx << base << base + 1;
+    }
+}
+
+static void genCollisionWireCone(float r, float h, int axisUp,
+                                 QVector<float> &v, QVector<quint32> &idx)
+{
+    float halfH = h * 0.5f;
+    float baseCtr[3] = {0,0,0}, apex[3] = {0,0,0};
+    int circleAxis = 1;
+    if (axisUp == 0)      { baseCtr[0]=-halfH; apex[0]=halfH; circleAxis=0; }
+    else if (axisUp == 2) { baseCtr[2]=-halfH; apex[2]=halfH; circleAxis=2; }
+    else                  { baseCtr[1]=-halfH; apex[1]=halfH; circleAxis=1; }
+    addCircle(v, idx, r, baseCtr[0], baseCtr[1], baseCtr[2], circleAxis);
+    // 4 lines from base to apex
+    quint32 apexIdx = v.size() / 6;
+    v << apex[0] << apex[1] << apex[2] << 0 << 0 << 0;
+    const int N = 4;
+    for (int i = 0; i < N; ++i) {
+        float a = 2.f * float(M_PI) * i / N;
+        float c = r * cosf(a), s = r * sinf(a);
+        quint32 bi = v.size() / 6;
+        float p[3] = {baseCtr[0], baseCtr[1], baseCtr[2]};
+        if (circleAxis == 0)      { p[1]+=c; p[2]+=s; }
+        else if (circleAxis == 2) { p[0]+=c; p[1]+=s; }
+        else                      { p[0]+=c; p[2]+=s; }
+        v << p[0] << p[1] << p[2] << 0 << 0 << 0;
+        idx << bi << apexIdx;
+    }
+}
+
+static void genCollisionWireCapsule(float r, float h, int axisUp,
+                                    QVector<float> &v, QVector<quint32> &idx)
+{
+    // Cylinder body + 2 hemisphere arcs
+    genCollisionWireCylinder(r, h, axisUp, v, idx);
+    float halfH = h * 0.5f;
+    // hemisphere arcs at each end (2 arcs per end)
+    for (int end = 0; end < 2; ++end) {
+        float sign = end == 0 ? -1.f : 1.f;
+        for (int arc = 0; arc < 2; ++arc) {
+            quint32 base = v.size() / 6;
+            const int N = 12;
+            for (int i = 0; i <= N; ++i) {
+                float a = float(M_PI) * 0.5f * i / N; // 0 to pi/2
+                float ra = r * cosf(a);
+                float ha = sign * (halfH + r * sinf(a));
+                float p[3] = {0,0,0};
+                if (axisUp == 1) {
+                    p[1] = ha;
+                    if (arc == 0) { p[0] = ra; } else { p[2] = ra; }
+                } else if (axisUp == 2) {
+                    p[2] = ha;
+                    if (arc == 0) { p[0] = ra; } else { p[1] = ra; }
+                } else {
+                    p[0] = ha;
+                    if (arc == 0) { p[1] = ra; } else { p[2] = ra; }
+                }
+                v << p[0] << p[1] << p[2] << 0 << 0 << 0;
+                if (i > 0) idx << base + i - 1 << base + i;
+            }
+        }
+    }
+}
+
+static void genCollisionWirePlane(float w, float l, int axisUp,
+                                  QVector<float> &v, QVector<quint32> &idx)
+{
+    float hw = w * 0.5f, hl = l * 0.5f;
+    quint32 base = v.size() / 6;
+    float corners[4][3];
+    if (axisUp == 1)      { float c[][3]={{-hw,0,-hl},{hw,0,-hl},{hw,0,hl},{-hw,0,hl}}; memcpy(corners,c,sizeof(c)); }
+    else if (axisUp == 2) { float c[][3]={{-hw,-hl,0},{hw,-hl,0},{hw,hl,0},{-hw,hl,0}}; memcpy(corners,c,sizeof(c)); }
+    else                  { float c[][3]={{0,-hw,-hl},{0,hw,-hl},{0,hw,hl},{0,-hw,hl}}; memcpy(corners,c,sizeof(c)); }
+    for (auto &c : corners)
+        v << c[0] << c[1] << c[2] << 0 << 0 << 0;
+    idx << base+0 << base+1 << base+1 << base+2 << base+2 << base+3 << base+3 << base+0;
+}
+
 void UsdViewportItem::buildMeshes()
 {
     m_meshes.clear();
@@ -1674,6 +1831,48 @@ void UsdViewportItem::buildMeshes()
         }
 
         md.primPath = QString::fromStdString(prim.GetPath().GetString());
+
+        // Generate sparse collision wireframe for simple types
+        if (md.hasCollisionAPI && !md.lineOnly) {
+            int axisUp = 1; // default Y-up for generated shapes
+            if (type == "Cylinder" || type == "Cone" || type == "Capsule") {
+                TfToken axis;
+                if (type == "Cylinder") UsdGeomCylinder(prim).GetAxisAttr().Get(&axis);
+                else if (type == "Cone") UsdGeomCone(prim).GetAxisAttr().Get(&axis);
+                else UsdGeomCapsule(prim).GetAxisAttr().Get(&axis);
+                if (axis == TfToken("X")) axisUp = 0;
+                else if (axis == TfToken("Z")) axisUp = 2;
+            }
+
+            if (type == "Sphere") {
+                double r = 1.0; UsdGeomSphere(prim).GetRadiusAttr().Get(&r);
+                genCollisionWireSphere(float(r), md.collisionWireVerts, md.collisionWireIndices);
+            } else if (type == "Cube") {
+                double s = 2.0; UsdGeomCube(prim).GetSizeAttr().Get(&s);
+                genCollisionWireCube(float(s), md.collisionWireVerts, md.collisionWireIndices);
+            } else if (type == "Cylinder") {
+                double h = 2.0, r = 0.5;
+                UsdGeomCylinder cyl(prim); cyl.GetHeightAttr().Get(&h); cyl.GetRadiusAttr().Get(&r);
+                genCollisionWireCylinder(float(r), float(h), axisUp, md.collisionWireVerts, md.collisionWireIndices);
+            } else if (type == "Cone") {
+                double h = 2.0, r = 0.5;
+                UsdGeomCone cone(prim); cone.GetHeightAttr().Get(&h); cone.GetRadiusAttr().Get(&r);
+                genCollisionWireCone(float(r), float(h), axisUp, md.collisionWireVerts, md.collisionWireIndices);
+            } else if (type == "Capsule") {
+                double h = 1.0, r = 0.5;
+                UsdGeomCapsule cap(prim); cap.GetHeightAttr().Get(&h); cap.GetRadiusAttr().Get(&r);
+                genCollisionWireCapsule(float(r), float(h), axisUp, md.collisionWireVerts, md.collisionWireIndices);
+            } else if (type == "Plane") {
+                double w = 2.0, l = 2.0; TfToken axis;
+                UsdGeomPlane plane(prim); plane.GetWidthAttr().Get(&w); plane.GetLengthAttr().Get(&l);
+                plane.GetAxisAttr().Get(&axis);
+                int upAxis = 1;
+                if (axis == TfToken("X")) upAxis = 0;
+                else if (axis == TfToken("Z")) upAxis = 2;
+                genCollisionWirePlane(float(w), float(l), upAxis, md.collisionWireVerts, md.collisionWireIndices);
+            }
+            // Mesh type: no sparse wireframe, uses full triangle edges (md.edges)
+        }
 
         if (!md.lineOnly)
             computeSmoothNormals(md);
@@ -2844,6 +3043,7 @@ void UsdViewportRenderer::destroyMeshes()
         delete m.ibufEdge;
         delete m.wireUbuf; delete m.wireSrb;
         delete m.colUbuf; delete m.colSrb;
+        delete m.colVbuf; delete m.colIbuf;
     }
     m_meshes.clear();
 }
@@ -2910,8 +3110,10 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
     dst.isCollision = src.isCollision;
     dst.hasCollisionAPI = src.hasCollisionAPI;
 
-    // Collision wireframe: dedicated UBO so it never conflicts with the solid pass
-    if (src.hasCollisionAPI && !src.edges.isEmpty()) {
+    // Collision wireframe: dedicated UBO + optional sparse wireframe buffers
+    bool hasColWire = src.hasCollisionAPI &&
+                      (!src.collisionWireIndices.isEmpty() || !src.edges.isEmpty());
+    if (hasColWire) {
         dst.colUbuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 160);
         dst.colUbuf->create();
         dst.colSrb = rhi->newShaderResourceBindings();
@@ -2926,6 +3128,19 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
                 m_lightUbuf)
         });
         dst.colSrb->create();
+
+        // Upload sparse wireframe geometry if available (simple types),
+        // otherwise fall back to full triangle edges (Mesh type)
+        if (!src.collisionWireIndices.isEmpty()) {
+            const int cvsize = src.collisionWireVerts.size() * sizeof(float);
+            const int cisize = src.collisionWireIndices.size() * sizeof(quint32);
+            dst.colVbuf = rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, cvsize);
+            dst.colIbuf = rhi->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::IndexBuffer, cisize);
+            dst.colVbuf->create(); dst.colIbuf->create();
+            batch->uploadStaticBuffer(dst.colVbuf, src.collisionWireVerts.constData());
+            batch->uploadStaticBuffer(dst.colIbuf, src.collisionWireIndices.constData());
+            dst.colWireCount = src.collisionWireIndices.size();
+        }
     }
 
     // Compute centroid from vertices (model space)
@@ -3540,20 +3755,26 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         }
     }
 
-    // Draw collision wireframe (edges) — filtered by collisionDisplayMode
-    // Uses dedicated colUbuf/colSrb so it never conflicts with the solid pass UBO.
+    // Draw collision wireframe — use sparse wireframe if available, else full edges
     if (m_collisionPipeline && m_collisionDisplayMode > 0) {
         cb->setGraphicsPipeline(m_collisionPipeline);
         cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
         for (int i = 0; i < m_meshes.size(); ++i) {
             auto &m = m_meshes[i];
             if (!m.hasCollisionAPI || !m.colSrb) continue;
-            if (!m.ibufEdge || m.edgeCount == 0) continue;
             if (m_collisionDisplayMode == 1 && !m_selectedIndices.contains(i)) continue;
             cb->setShaderResources(m.colSrb);
-            QRhiCommandBuffer::VertexInput vi(m.vbuf, 0);
-            cb->setVertexInput(0, 1, &vi, m.ibufEdge, 0, QRhiCommandBuffer::IndexUInt32);
-            cb->drawIndexed(m.edgeCount);
+            if (m.colVbuf && m.colIbuf && m.colWireCount > 0) {
+                // Sparse wireframe (simple types: Sphere, Cube, Cylinder, etc.)
+                QRhiCommandBuffer::VertexInput vi(m.colVbuf, 0);
+                cb->setVertexInput(0, 1, &vi, m.colIbuf, 0, QRhiCommandBuffer::IndexUInt32);
+                cb->drawIndexed(m.colWireCount);
+            } else if (m.ibufEdge && m.edgeCount > 0) {
+                // Full triangle edges (Mesh type)
+                QRhiCommandBuffer::VertexInput vi(m.vbuf, 0);
+                cb->setVertexInput(0, 1, &vi, m.ibufEdge, 0, QRhiCommandBuffer::IndexUInt32);
+                cb->drawIndexed(m.edgeCount);
+            }
         }
     }
 
