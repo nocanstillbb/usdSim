@@ -75,6 +75,16 @@ qt_add_shaders(usdSimLib "viewport_shaders"
         shaders/viewport.frag.qsb
 )
 
+qt_add_shaders(usdSimLib "outline_shaders"
+    PREFIX "/"
+    FILES
+        src/shaders/outline_post.vert
+        src/shaders/outline_post.frag
+    OUTPUTS
+        shaders/outline_post.vert.qsb
+        shaders/outline_post.frag.qsb
+)
+
 set_target_properties(usdSimLib PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
     INSTALL_RPATH "${USD_INSTALL_DIR}/lib"

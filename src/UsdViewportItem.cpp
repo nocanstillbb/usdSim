@@ -139,6 +139,20 @@ private:
     QVector<LightData> m_sceneLights;
     QRhiBuffer *m_lightUbuf = nullptr;
     QVector3D m_cameraEye;
+
+    // Post-process outline
+    QRhiTexture *m_maskTex = nullptr;
+    QRhiRenderBuffer *m_maskDS = nullptr;
+    QRhiTextureRenderTarget *m_maskRT = nullptr;
+    QRhiRenderPassDescriptor *m_maskRpDesc = nullptr;
+    QRhiGraphicsPipeline *m_maskPipeline = nullptr;
+    QRhiGraphicsPipeline *m_outlinePipeline = nullptr;
+    QRhiSampler *m_maskSampler = nullptr;
+    QRhiBuffer *m_outlineUbuf = nullptr;
+    QRhiBuffer *m_fsTriVbuf = nullptr;
+    QRhiShaderResourceBindings *m_outlineSrb = nullptr;
+    QShader m_outlineVs, m_outlineFs;
+    QSize m_maskSize;
 };
 
 // ================================================================
@@ -3080,6 +3094,17 @@ UsdViewportRenderer::~UsdViewportRenderer()
     delete m_gridPipeline;
     delete m_lineMeshPipeline;
     delete m_collisionPipeline;
+    // Post-process outline
+    delete m_maskPipeline;
+    delete m_outlinePipeline;
+    delete m_outlineSrb;
+    delete m_outlineUbuf;
+    delete m_fsTriVbuf;
+    delete m_maskSampler;
+    delete m_maskRpDesc;
+    delete m_maskRT;
+    delete m_maskDS;
+    delete m_maskTex;
 }
 
 void UsdViewportRenderer::destroyMeshes()
@@ -3260,6 +3285,8 @@ void UsdViewportRenderer::initialize(QRhiCommandBuffer *)
     m_initialized = true;
     m_vs = loadShader(":/shaders/viewport.vert.qsb");
     m_fs = loadShader(":/shaders/viewport.frag.qsb");
+    m_outlineVs = loadShader(":/shaders/outline_post.vert.qsb");
+    m_outlineFs = loadShader(":/shaders/outline_post.frag.qsb");
 
     // Scene light UBO (std140: 48 bytes/light * 16 + 16 = 784)
     QRhi *rhi = renderTarget()->rhi();
@@ -3349,6 +3376,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         delete m_stencilPipeline; m_stencilPipeline = nullptr;
         delete m_lineMeshPipeline; m_lineMeshPipeline = nullptr;
         delete m_collisionPipeline; m_collisionPipeline = nullptr;
+        delete m_maskPipeline; m_maskPipeline = nullptr;
         m_meshes.resize(m_pending.size());
         for (int i = 0; i < m_pending.size(); i++)
             uploadMesh(m_meshes[i], m_pending[i], upd);
@@ -3606,6 +3634,131 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
 
     const QSize sz = renderTarget()->pixelSize();
 
+    // === Post-process outline: mask render target + pipelines ===
+    bool hasOutlineSelection = false;
+    for (int i : m_selectedIndices) {
+        if (i >= 0 && i < m_meshes.size() && !m_meshes[i].lineOnly) {
+            hasOutlineSelection = true; break;
+        }
+    }
+
+    // Resize mask texture when viewport size changes
+    if (m_maskTex && m_maskSize != sz) {
+        delete m_outlinePipeline; m_outlinePipeline = nullptr;
+        delete m_maskPipeline; m_maskPipeline = nullptr;
+        delete m_outlineSrb; m_outlineSrb = nullptr;
+        delete m_maskRpDesc; m_maskRpDesc = nullptr;
+        delete m_maskRT; m_maskRT = nullptr;
+        delete m_maskDS; m_maskDS = nullptr;
+        delete m_maskTex; m_maskTex = nullptr;
+    }
+
+    // Create mask render target (RGBA8 texture + depth renderbuffer)
+    if (hasOutlineSelection && !m_maskTex) {
+        m_maskTex = rhi->newTexture(QRhiTexture::RGBA8, sz, 1);
+        m_maskTex->create();
+        m_maskDS = rhi->newRenderBuffer(QRhiRenderBuffer::DepthStencil, sz, 1);
+        m_maskDS->create();
+        QRhiColorAttachment maskAtt(m_maskTex);
+        QRhiTextureRenderTargetDescription rtDesc(maskAtt);
+        rtDesc.setDepthStencilBuffer(m_maskDS);
+        m_maskRT = rhi->newTextureRenderTarget(rtDesc);
+        m_maskRpDesc = m_maskRT->newCompatibleRenderPassDescriptor();
+        m_maskRT->setRenderPassDescriptor(m_maskRpDesc);
+        m_maskRT->create();
+        m_maskSize = sz;
+    }
+
+    // Mask pipeline: render selected meshes to mask texture (no depth test, both faces)
+    if (hasOutlineSelection && m_maskRT && !m_maskPipeline && !m_meshes.isEmpty()) {
+        QRhiVertexInputLayout il;
+        il.setBindings({ QRhiVertexInputBinding(6 * sizeof(float)) });
+        il.setAttributes({
+            QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float3, 0),
+            QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float3, 3 * sizeof(float))
+        });
+        int refIdx = 0;
+        for (int i = 0; i < m_meshes.size(); ++i)
+            if (!m_meshes[i].lineOnly) { refIdx = i; break; }
+
+        m_maskPipeline = rhi->newGraphicsPipeline();
+        QRhiGraphicsPipeline::TargetBlend blend; blend.enable = false;
+        m_maskPipeline->setTargetBlends({blend});
+        m_maskPipeline->setDepthTest(false);
+        m_maskPipeline->setDepthWrite(false);
+        m_maskPipeline->setCullMode(QRhiGraphicsPipeline::None);
+        m_maskPipeline->setShaderStages({
+            { QRhiShaderStage::Vertex,   m_vs },
+            { QRhiShaderStage::Fragment, m_fs }
+        });
+        m_maskPipeline->setVertexInputLayout(il);
+        m_maskPipeline->setShaderResourceBindings(m_meshes[refIdx].srb);
+        m_maskPipeline->setRenderPassDescriptor(m_maskRpDesc);
+        m_maskPipeline->setSampleCount(1);
+        m_maskPipeline->create();
+    }
+
+    // Outline post-process pipeline
+    if (hasOutlineSelection && m_maskTex && !m_outlinePipeline) {
+        // Fullscreen triangle vertex buffer [pos.xy, uv.xy]
+        if (!m_fsTriVbuf) {
+            static const float fsTriData[] = {
+                -1.f, -1.f,  0.f, 0.f,
+                 3.f, -1.f,  2.f, 0.f,
+                -1.f,  3.f,  0.f, 2.f,
+            };
+            m_fsTriVbuf = rhi->newBuffer(QRhiBuffer::Immutable,
+                                          QRhiBuffer::VertexBuffer, sizeof(fsTriData));
+            m_fsTriVbuf->create();
+            upd->uploadStaticBuffer(m_fsTriVbuf, fsTriData);
+        }
+        if (!m_maskSampler) {
+            m_maskSampler = rhi->newSampler(
+                QRhiSampler::Linear, QRhiSampler::Linear, QRhiSampler::None,
+                QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
+            m_maskSampler->create();
+        }
+        if (!m_outlineUbuf) {
+            m_outlineUbuf = rhi->newBuffer(QRhiBuffer::Dynamic,
+                                            QRhiBuffer::UniformBuffer, 32);
+            m_outlineUbuf->create();
+        }
+        if (!m_outlineSrb) {
+            m_outlineSrb = rhi->newShaderResourceBindings();
+            m_outlineSrb->setBindings({
+                QRhiShaderResourceBinding::sampledTexture(
+                    0, QRhiShaderResourceBinding::FragmentStage,
+                    m_maskTex, m_maskSampler),
+                QRhiShaderResourceBinding::uniformBuffer(
+                    1, QRhiShaderResourceBinding::FragmentStage,
+                    m_outlineUbuf)
+            });
+            m_outlineSrb->create();
+        }
+
+        QRhiVertexInputLayout il;
+        il.setBindings({ QRhiVertexInputBinding(4 * sizeof(float)) });
+        il.setAttributes({
+            QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float2, 0),
+            QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float))
+        });
+        m_outlinePipeline = rhi->newGraphicsPipeline();
+        QRhiGraphicsPipeline::TargetBlend blend; blend.enable = false;
+        m_outlinePipeline->setTargetBlends({blend});
+        m_outlinePipeline->setDepthTest(false);
+        m_outlinePipeline->setDepthWrite(false);
+        m_outlinePipeline->setCullMode(QRhiGraphicsPipeline::None);
+        m_outlinePipeline->setShaderStages({
+            { QRhiShaderStage::Vertex,   m_outlineVs },
+            { QRhiShaderStage::Fragment, m_outlineFs }
+        });
+        m_outlinePipeline->setVertexInputLayout(il);
+        m_outlinePipeline->setShaderResourceBindings(m_outlineSrb);
+        m_outlinePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_outlinePipeline->setSampleCount(renderTarget()->sampleCount());
+        m_outlinePipeline->create();
+    }
+
     struct alignas(16) UBuf {
         float mvp[16], model[16], color[4], lightDir[4];
     };
@@ -3758,7 +3911,38 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         }
     }
 
-    cb->beginPass(renderTarget(), QColor(30, 30, 30), {1.f, 0}, upd);
+    // Outline UBO upload
+    if (hasOutlineSelection && m_outlineUbuf) {
+        struct alignas(16) OutUBuf { float color[4]; float params[4]; };
+        OutUBuf ou{};
+        ou.color[0] = 1.f; ou.color[1] = 0.78f; ou.color[2] = 0.f; ou.color[3] = 1.f;
+        ou.params[0] = 1.f / float(sz.width());   // texelSize.x
+        ou.params[1] = 1.f / float(sz.height());  // texelSize.y
+        ou.params[2] = 3.f;                        // radius in pixels
+        ou.params[3] = 0.f;
+        upd->updateDynamicBuffer(m_outlineUbuf, 0, sizeof(OutUBuf), &ou);
+    }
+
+    // --- Mask pass: render selected meshes to mask texture ---
+    QRhiResourceUpdateBatch *updForMain = upd;
+    if (hasOutlineSelection && m_maskRT && m_maskPipeline) {
+        cb->beginPass(m_maskRT, QColor(0, 0, 0, 0), {1.f, 0}, upd);
+        updForMain = nullptr; // upd consumed by mask pass
+        cb->setGraphicsPipeline(m_maskPipeline);
+        cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
+        for (int selIdx : m_selectedIndices) {
+            if (selIdx < 0 || selIdx >= m_meshes.size()) continue;
+            auto &sel = m_meshes[selIdx];
+            if (sel.lineOnly) continue;
+            cb->setShaderResources(sel.srb);
+            QRhiCommandBuffer::VertexInput vi(sel.vbuf, 0);
+            cb->setVertexInput(0, 1, &vi, sel.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
+            cb->drawIndexed(sel.indexCount);
+        }
+        cb->endPass();
+    }
+
+    cb->beginPass(renderTarget(), QColor(30, 30, 30), {1.f, 0}, updForMain);
 
     if (m_pipeline) {
     // Draw solid (triangle) meshes — skip light gizmos unless selected, skip collision
@@ -3826,41 +4010,15 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         }
     }
 
-    // Selection outline for each selected mesh (stencil mask + inverted hull)
-    // Skip lineOnly meshes — they have no stencil outline support
-    if (m_stencilPipeline && m_wirePipeline) {
-    for (int selIdx : m_selectedIndices) {
-        if (selIdx < 0 || selIdx >= m_meshes.size()) continue;
-        auto &sel = m_meshes[selIdx];
-        if (sel.lineOnly) continue;
-
-        // Pass 1: Write stencil=1 for this mesh (use original vbuf for exact shape)
-        cb->setGraphicsPipeline(m_stencilPipeline);
+    // Post-process selection outline (fullscreen edge detection on mask texture)
+    if (hasOutlineSelection && m_outlinePipeline && m_fsTriVbuf) {
+        cb->setGraphicsPipeline(m_outlinePipeline);
         cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
-        cb->setStencilRef(1);
-        cb->setShaderResources(sel.srb);
-        QRhiCommandBuffer::VertexInput vi1(sel.vbuf, 0);
-        cb->setVertexInput(0, 1, &vi1, sel.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
-        cb->drawIndexed(sel.indexCount);
-
-        // Pass 2: Draw outline where stencil != 1 (use smooth normals for closed outline)
-        cb->setGraphicsPipeline(m_wirePipeline);
-        cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
-        cb->setStencilRef(1);
-        cb->setShaderResources(sel.wireSrb);
-        QRhiCommandBuffer::VertexInput vi2(sel.vbufSmooth, 0);
-        cb->setVertexInput(0, 1, &vi2, sel.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
-        cb->drawIndexed(sel.indexCount);
-
-        // Pass 3: Reset stencil to 0 so it doesn't interfere with next mesh
-        cb->setGraphicsPipeline(m_stencilPipeline);
-        cb->setStencilRef(0);
-        cb->setShaderResources(sel.srb);
-        QRhiCommandBuffer::VertexInput vi3(sel.vbuf, 0);
-        cb->setVertexInput(0, 1, &vi3, sel.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
-        cb->drawIndexed(sel.indexCount);
+        cb->setShaderResources(m_outlineSrb);
+        QRhiCommandBuffer::VertexInput fvi(m_fsTriVbuf, 0);
+        cb->setVertexInput(0, 1, &fvi);
+        cb->draw(3);
     }
-    } // stencil/wire pipelines
     } // if (m_pipeline)
 
     // Gizmo rendering (always on top, no depth test)
