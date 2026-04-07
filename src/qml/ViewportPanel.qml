@@ -198,6 +198,64 @@ Rectangle {
         }
     }
 
+    // Collision display mode toggle
+    Row {
+        visible: panel.document.isOpen
+        anchors { top: parent.top; left: parent.left; topMargin: 68; leftMargin: 8 }
+        spacing: 1
+
+        Rectangle {
+            width: collisionRow.width + 4
+            height: collisionRow.height + 4
+            radius: 4
+            color: "#cc1e1e1e"
+
+            Row {
+                id: collisionRow
+                anchors.centerIn: parent
+                spacing: 1
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "碰撞"
+                    font.family: AppStyle.fontFamily; font.pixelSize: 11
+                    color: "#888888"
+                    leftPadding: 4; rightPadding: 2
+                }
+
+                Repeater {
+                    model: [
+                        { label: "隐藏", mode: 0 },
+                        { label: "选中", mode: 1 },
+                        { label: "全部", mode: 2 }
+                    ]
+                    delegate: Rectangle {
+                        width: 44; height: 24
+                        radius: 3
+                        color: viewport.collisionDisplayMode === modelData.mode
+                            ? (modelData.mode > 0 ? "#2e7d32" : "#555555")
+                            : colArea.containsMouse ? "#40ffffff" : "transparent"
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            font.family: AppStyle.fontFamily; font.pixelSize: 11
+                            color: viewport.collisionDisplayMode === modelData.mode ? "#ffffff" : "#aaaaaa"
+                        }
+
+                        MouseArea {
+                            id: colArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: viewport.collisionDisplayMode = modelData.mode
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Text {
         x: viewport.orientLabelX.x - width / 2
         y: viewport.orientLabelX.y - height / 2

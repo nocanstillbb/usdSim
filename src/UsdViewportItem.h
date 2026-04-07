@@ -18,6 +18,8 @@ struct MeshData {
     QString          primPath;
     bool             lineOnly = false; // true = render with Lines topology (light gizmos)
     bool             isLightGizmo = false; // true = only draw when selected
+    bool             isCollision = false; // true = collision-only (purpose=guide), wireframe only
+    bool             hasCollisionAPI = false; // true = has PhysicsCollisionAPI, draw green wireframe overlay
 };
 
 enum GizmoMode {
@@ -73,6 +75,7 @@ class UsdViewportItem : public QQuickRhiItem
     Q_PROPERTY(bool showGrid READ showGrid WRITE setShowGrid NOTIFY showGridChanged)
     Q_PROPERTY(bool snapEnabled READ snapEnabled WRITE setSnapEnabled NOTIFY snapEnabledChanged)
     Q_PROPERTY(QString stageUnitLabel READ stageUnitLabel NOTIFY stageUnitLabelChanged)
+    Q_PROPERTY(int collisionDisplayMode READ collisionDisplayMode WRITE setCollisionDisplayMode NOTIFY collisionDisplayModeChanged)
     QML_ELEMENT
 
 public:
@@ -108,6 +111,8 @@ public:
     bool snapEnabled() const { return m_snapEnabled; }
     void setSnapEnabled(bool on);
     QString stageUnitLabel() const { return m_stageUnitLabel; }
+    int  collisionDisplayMode() const { return m_collisionDisplayMode; }
+    void setCollisionDisplayMode(int mode);
     const QVector<GizmoMeshData> &gridMeshes() const { return m_gridMeshes; }
     bool gridDirty() const { return m_gridDirty; }
     void clearGridDirty() { m_gridDirty = false; }
@@ -133,6 +138,7 @@ signals:
     void showGridChanged();
     void snapEnabledChanged();
     void stageUnitLabelChanged();
+    void collisionDisplayModeChanged();
 
 protected:
     void mousePressEvent(QMouseEvent *e) override;
@@ -213,4 +219,7 @@ private:
     bool m_snapEnabled = false;
     bool m_gridDirty = false;
     QVector<GizmoMeshData> m_gridMeshes;
+
+    // Collision display: 0=None, 1=Selected, 2=All
+    int m_collisionDisplayMode = 0;
 };

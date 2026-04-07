@@ -70,6 +70,10 @@ private:
         QVector3D  centroid;
         bool lineOnly = false;
         bool isLightGizmo = false;
+        bool isCollision = false;
+        bool hasCollisionAPI = false;
+        QRhiBuffer *colUbuf = nullptr;              // collision wireframe UBO
+        QRhiShaderResourceBindings *colSrb = nullptr;
     };
 
     void destroyMeshes();
@@ -119,10 +123,12 @@ private:
 
     // Grid
     QRhiGraphicsPipeline *m_gridPipeline = nullptr;
+    QRhiGraphicsPipeline *m_collisionPipeline = nullptr;
     QVector<RhiGizmoMesh> m_rhiGrid;
     QVector<GizmoMeshData> m_gridPending;
     bool m_gridRebuild = false;
     bool m_showGrid = false;
+    int  m_collisionDisplayMode = 0;
 
     float m_unitScale = 1.f;
 
@@ -1156,6 +1162,16 @@ void UsdViewportItem::setSnapEnabled(bool on)
     emit snapEnabledChanged();
 }
 
+void UsdViewportItem::setCollisionDisplayMode(int mode)
+{
+    mode = qBound(0, mode, 2);
+    if (m_collisionDisplayMode == mode) return;
+    m_collisionDisplayMode = mode;
+    buildMeshes();          // rebuilds m_meshes, sets m_meshDirty = true
+    update();               // schedule a re-render
+    emit collisionDisplayModeChanged();
+}
+
 // Rotate vertices generated with Y-up to match the USD prim's axis attribute.
 // Generators produce geometry with height along Y; this swizzles to X or Z when needed.
 static void rotateVertsForAxis(QVector<float> &v, const TfToken &axis)
@@ -1467,12 +1483,33 @@ void UsdViewportItem::buildMeshes()
         if (primInvisible && !isLightType)
             continue;
 
-        // Skip prims with purpose != "default" (e.g. "guide" collision shapes, "proxy", "render")
+        // Detect collision prims via PhysicsCollisionAPI.
+        // PhysicsMeshCollisionAPI = convex hull source mesh → skip (not the actual shape).
+        bool isCollision = false;
+        bool hasCollisionAPI = false;
+        if (!isLightType) {
+            bool hasMeshCollisionAPI = false;
+            for (const TfToken &schema : prim.GetAppliedSchemas()) {
+                const auto &s = schema.GetString();
+                if (s.find("PhysicsCollisionAPI") != std::string::npos)
+                    hasCollisionAPI = true;
+                if (s.find("PhysicsMeshCollisionAPI") != std::string::npos)
+                    hasMeshCollisionAPI = true;
+            }
+            if (hasMeshCollisionAPI)
+                hasCollisionAPI = false;
+        }
+
+        // Skip prims with purpose != "default" (guide/proxy/render),
+        // unless it's a collision prim (PhysicsCollisionAPI) with display enabled.
         if (img && !isLightType) {
-            TfToken purpose;
-            img.GetPurposeAttr().Get(&purpose);
-            if (!purpose.IsEmpty() && purpose != UsdGeomTokens->default_)
-                continue;
+            TfToken purpose = img.ComputePurpose();
+            if (!purpose.IsEmpty() && purpose != UsdGeomTokens->default_) {
+                if (hasCollisionAPI && m_collisionDisplayMode > 0)
+                    isCollision = true;
+                else
+                    continue;
+            }
         }
 
         QVector<float>   verts;
@@ -1590,7 +1627,11 @@ void UsdViewportItem::buildMeshes()
                         type == "DiskLight"   || type == "CylinderLight" ||
                         type == "DistantLight" || type == "DomeLight");
         md.isLightGizmo = isLight;
-        if (isLight) {
+        md.isCollision = isCollision;
+        md.hasCollisionAPI = hasCollisionAPI || isCollision;
+        if (isCollision) {
+            md.color = QVector3D(0.0f, 0.8f, 0.0f); // green wireframe
+        } else if (isLight) {
             md.color = lightColor;
         } else if (type == "Camera") {
             md.color = cameraColor;
@@ -1749,6 +1790,7 @@ void UsdViewportItem::buildMeshes()
         QVector3D bmin(FLT_MAX, FLT_MAX, FLT_MAX);
         QVector3D bmax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
         for (const auto &md : m_meshes) {
+            if (md.isCollision) continue; // exclude collision from camera fitting
             // Transform each vertex's bounding contribution
             const float *v = md.vertices.constData();
             int vertCount = md.vertices.size() / 6;
@@ -2682,6 +2724,7 @@ int UsdViewportItem::pickMesh(const QPointF &pos) const
 
     for (int mi = 0; mi < m_meshes.size(); ++mi) {
         const MeshData &md = m_meshes[mi];
+        if (md.isCollision) continue; // collision meshes are not pickable via click
         // Transform ray to mesh local space
         QMatrix4x4 invModel = md.transform.inverted();
         QVector3D orig = invModel.map(rayOrig);
@@ -2789,6 +2832,7 @@ UsdViewportRenderer::~UsdViewportRenderer()
     delete m_gizmoPipeline;
     delete m_gridPipeline;
     delete m_lineMeshPipeline;
+    delete m_collisionPipeline;
 }
 
 void UsdViewportRenderer::destroyMeshes()
@@ -2799,6 +2843,7 @@ void UsdViewportRenderer::destroyMeshes()
         delete m.ubuf; delete m.srb;
         delete m.ibufEdge;
         delete m.wireUbuf; delete m.wireSrb;
+        delete m.colUbuf; delete m.colSrb;
     }
     m_meshes.clear();
 }
@@ -2862,6 +2907,26 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
     dst.color      = src.color;
     dst.lineOnly   = src.lineOnly;
     dst.isLightGizmo = src.isLightGizmo;
+    dst.isCollision = src.isCollision;
+    dst.hasCollisionAPI = src.hasCollisionAPI;
+
+    // Collision wireframe: dedicated UBO so it never conflicts with the solid pass
+    if (src.hasCollisionAPI && !src.edges.isEmpty()) {
+        dst.colUbuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 160);
+        dst.colUbuf->create();
+        dst.colSrb = rhi->newShaderResourceBindings();
+        dst.colSrb->setBindings({
+            QRhiShaderResourceBinding::uniformBuffer(
+                0,
+                QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
+                dst.colUbuf),
+            QRhiShaderResourceBinding::uniformBuffer(
+                1,
+                QRhiShaderResourceBinding::FragmentStage,
+                m_lightUbuf)
+        });
+        dst.colSrb->create();
+    }
 
     // Compute centroid from vertices (model space)
     {
@@ -2997,6 +3062,9 @@ void UsdViewportRenderer::synchronize(QQuickRhiItem *item)
         m_orientRebuild = true;
     }
 
+    // Collision display mode
+    m_collisionDisplayMode = vp->collisionDisplayMode();
+
     // Grid state
     m_showGrid = vp->showGrid() && vp->document() && vp->document()->isOpen();
     if (vp->gridDirty()) {
@@ -3017,6 +3085,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         delete m_wirePipeline; m_wirePipeline = nullptr;
         delete m_stencilPipeline; m_stencilPipeline = nullptr;
         delete m_lineMeshPipeline; m_lineMeshPipeline = nullptr;
+        delete m_collisionPipeline; m_collisionPipeline = nullptr;
         m_meshes.resize(m_pending.size());
         for (int i = 0; i < m_pending.size(); i++)
             uploadMesh(m_meshes[i], m_pending[i], upd);
@@ -3120,6 +3189,29 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         m_lineMeshPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
         m_lineMeshPipeline->setSampleCount(renderTarget()->sampleCount());
         m_lineMeshPipeline->create();
+
+        // Collision wireframe pipeline (Lines topology, depth test LessOrEqual)
+        // LessOrEqual so wireframe at the same depth as its solid surface shows,
+        // while objects in front (e.g. shirt on table) properly occlude it.
+        m_collisionPipeline = rhi->newGraphicsPipeline();
+        m_collisionPipeline->setTopology(QRhiGraphicsPipeline::Lines);
+        m_collisionPipeline->setLineWidth(1.f);
+        QRhiGraphicsPipeline::TargetBlend colBlend; colBlend.enable = false;
+        m_collisionPipeline->setTargetBlends({colBlend});
+        m_collisionPipeline->setDepthTest(true);
+        m_collisionPipeline->setDepthOp(QRhiGraphicsPipeline::LessOrEqual);
+        m_collisionPipeline->setDepthWrite(false);
+        m_collisionPipeline->setStencilTest(false);
+        m_collisionPipeline->setCullMode(QRhiGraphicsPipeline::None);
+        m_collisionPipeline->setShaderStages({
+            { QRhiShaderStage::Vertex,   m_vs },
+            { QRhiShaderStage::Fragment, m_fs }
+        });
+        m_collisionPipeline->setVertexInputLayout(il);
+        m_collisionPipeline->setShaderResourceBindings(m_meshes[0].srb);
+        m_collisionPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+        m_collisionPipeline->setSampleCount(renderTarget()->sampleCount());
+        m_collisionPipeline->create();
 
         // Stencil/wire pipelines only if there are solid meshes
         if (solidIdx >= 0) {
@@ -3290,7 +3382,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         memcpy(ub.model, m.transform.constData(),   64);
         ub.color[0] = m.color.x(); ub.color[1] = m.color.y();
         ub.color[2] = m.color.z();
-        ub.color[3] = m.lineOnly ? 0.f : 1.f;  // lineOnly → flat color (no lighting)
+        ub.color[3] = (m.lineOnly || m.isCollision) ? 0.f : 1.f;  // flat color for wireframe
         // Pass camera eye in lightDir.xyz for normal-flip in fragment shader
         ub.lightDir[0] = m_cameraEye.x(); ub.lightDir[1] = m_cameraEye.y();
         ub.lightDir[2] = m_cameraEye.z(); ub.lightDir[3] = 0.f;
@@ -3307,6 +3399,17 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             wub.lightDir[0] = m.centroid.x(); wub.lightDir[1] = m.centroid.y();
             wub.lightDir[2] = m.centroid.z(); wub.lightDir[3] = 0.004f;
             upd->updateDynamicBuffer(m.wireUbuf, 0, sizeof(UBuf), &wub);
+        }
+
+        // Pre-upload collision wireframe UBO (green flat, dedicated buffer)
+        if (m.hasCollisionAPI && m.colUbuf) {
+            UBuf cub{};
+            memcpy(cub.mvp,   mvp.constData(),          64);
+            memcpy(cub.model, m.transform.constData(),   64);
+            cub.color[0] = 0.f; cub.color[1] = 0.8f;
+            cub.color[2] = 0.f; cub.color[3] = 0.f;  // flat green
+            memset(cub.lightDir, 0, 16);
+            upd->updateDynamicBuffer(m.colUbuf, 0, sizeof(UBuf), &cub);
         }
     }
 
@@ -3395,12 +3498,13 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
     cb->beginPass(renderTarget(), QColor(30, 30, 30), {1.f, 0}, upd);
 
     if (m_pipeline) {
-    // Draw solid (triangle) meshes — skip light gizmos unless selected
+    // Draw solid (triangle) meshes — skip light gizmos unless selected, skip collision
     cb->setGraphicsPipeline(m_pipeline);
     cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
     for (int i = 0; i < m_meshes.size(); ++i) {
         auto &m = m_meshes[i];
         if (m.lineOnly) continue;
+        if (m.isCollision) continue;
         if (m.isLightGizmo && !m_selectedIndices.contains(i)) continue;
         cb->setShaderResources(m.srb);
         QRhiCommandBuffer::VertexInput vi(m.vbuf, 0);
@@ -3433,6 +3537,23 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             QRhiCommandBuffer::VertexInput vi(m.vbuf, 0);
             cb->setVertexInput(0, 1, &vi, m.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
             cb->drawIndexed(m.indexCount);
+        }
+    }
+
+    // Draw collision wireframe (edges) — filtered by collisionDisplayMode
+    // Uses dedicated colUbuf/colSrb so it never conflicts with the solid pass UBO.
+    if (m_collisionPipeline && m_collisionDisplayMode > 0) {
+        cb->setGraphicsPipeline(m_collisionPipeline);
+        cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
+        for (int i = 0; i < m_meshes.size(); ++i) {
+            auto &m = m_meshes[i];
+            if (!m.hasCollisionAPI || !m.colSrb) continue;
+            if (!m.ibufEdge || m.edgeCount == 0) continue;
+            if (m_collisionDisplayMode == 1 && !m_selectedIndices.contains(i)) continue;
+            cb->setShaderResources(m.colSrb);
+            QRhiCommandBuffer::VertexInput vi(m.vbuf, 0);
+            cb->setVertexInput(0, 1, &vi, m.ibufEdge, 0, QRhiCommandBuffer::IndexUInt32);
+            cb->drawIndexed(m.edgeCount);
         }
     }
 
