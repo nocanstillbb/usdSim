@@ -1227,36 +1227,65 @@ static void genMesh(const UsdGeomMesh &mesh,
     normInterp = mesh.GetNormalsInterpolation();
     bool hasNormals = !normals.empty();
 
+    // Detect degenerate normals: all identical (e.g. cloth sim rest-pose all (0,0,1))
+    if (hasNormals && normals.size() > 1) {
+        const GfVec3f &first = normals[0];
+        bool allSame = true;
+        for (size_t i = 1; i < normals.size(); ++i) {
+            if ((normals[i] - first).GetLengthSq() > 1e-6f) {
+                allSame = false;
+                break;
+            }
+        }
+        if (allSame)
+            hasNormals = false; // discard uniform normals
+    }
+
+    // Compute area-weighted smooth vertex normals when authored normals are
+    // missing or degenerate. This gives correct shading for cloth meshes
+    // and any other mesh without reliable normal data.
+    if (!hasNormals) {
+        normals = VtArray<GfVec3f>(points.size(), GfVec3f(0));
+        int offset = 0;
+        for (int fvc : fvcArray) {
+            if (fvc < 3) { offset += fvc; continue; }
+            const GfVec3f &p0 = points[fviArray[offset]];
+            const GfVec3f &p1 = points[fviArray[offset + 1]];
+            const GfVec3f &p2 = points[fviArray[offset + 2]];
+            GfVec3f fn = GfCross(p1 - p0, p2 - p0); // length = 2*area → area-weighted
+            for (int k = 0; k < fvc; ++k) {
+                int vi = fviArray[offset + k];
+                if (vi >= 0 && vi < (int)normals.size())
+                    normals[vi] += fn;
+            }
+            offset += fvc;
+        }
+        for (auto &n : normals) {
+            if (n.GetLengthSq() > 1e-10f) n.Normalize();
+            else n = GfVec3f(0, 1, 0);
+        }
+        normInterp = UsdGeomTokens->vertex;
+        hasNormals = true;
+    }
+
     int fviOffset = 0;
     int faceIdx   = 0;
     for (int fvc : fvcArray) {
         if (fvc < 3) { fviOffset += fvc; ++faceIdx; continue; }
-
-        // Compute face normal (used when no authored normals)
-        GfVec3f fn(0, 1, 0);
-        if (!hasNormals) {
-            GfVec3f p0 = points[fviArray[fviOffset]];
-            GfVec3f p1 = points[fviArray[fviOffset + 1]];
-            GfVec3f p2 = points[fviArray[fviOffset + 2]];
-            fn = GfCross(p1 - p0, p2 - p0);
-            if (fn.GetLengthSq() > 1e-10f) fn.Normalize();
-        }
 
         // Fan triangulation from first vertex
         for (int tri = 1; tri < fvc - 1; tri++) {
             for (int k : {0, tri, tri + 1}) {
                 int vi = fviArray[fviOffset + k];
                 GfVec3f p = points[vi];
-                GfVec3f n = fn;
-                if (hasNormals) {
-                    if (normInterp == UsdGeomTokens->faceVarying)
-                        n = normals[fviOffset + k];
-                    else if (normInterp == UsdGeomTokens->vertex)
-                        n = (vi < (int)normals.size()) ? normals[vi] : fn;
-                    else // uniform / constant
-                        n = (faceIdx < (int)normals.size()) ? normals[faceIdx] : fn;
-                    if (n.GetLengthSq() > 1e-10f) n.Normalize();
-                }
+                GfVec3f n(0, 1, 0);
+                if (normInterp == UsdGeomTokens->faceVarying)
+                    n = normals[fviOffset + k];
+                else if (normInterp == UsdGeomTokens->vertex)
+                    n = (vi < (int)normals.size()) ? normals[vi] : n;
+                else // uniform / constant
+                    n = (faceIdx < (int)normals.size()) ? normals[faceIdx] : n;
+                if (n.GetLengthSq() > 1e-10f) n.Normalize();
                 quint32 base = v.size() / 6;
                 v << p[0] << p[1] << p[2] << n[0] << n[1] << n[2];
                 idx << base;
