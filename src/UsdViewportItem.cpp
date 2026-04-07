@@ -2950,17 +2950,21 @@ void UsdViewportItem::togglePrimPath(const QString &path)
 // ================================================================
 int UsdViewportItem::pickMesh(const QPointF &pos) const
 {
-    // Build ray from camera
-    QMatrix4x4 invVP = (m_proj * m_view).inverted();
+    // Build ray from camera eye through the clicked pixel.
+    // Use FOV + inverse view directly instead of inverse(proj*view) to avoid
+    // numerical precision loss at extreme zoom levels (large near/far ratio).
     float nx = 2.f * float(pos.x()) / float(width())  - 1.f;
     float ny = 1.f - 2.f * float(pos.y()) / float(height());
 
-    QVector4D nearH = invVP * QVector4D(nx, ny, -1.f, 1.f);
-    QVector4D farH  = invVP * QVector4D(nx, ny,  1.f, 1.f);
-    QVector3D nearP = nearH.toVector3DAffine();
-    QVector3D farP  = farH.toVector3DAffine();
-    QVector3D rayOrig = nearP;
-    QVector3D rayDir  = (farP - nearP).normalized();
+    const float aspect = (width() > 0 && height() > 0)
+                         ? float(width()) / float(height()) : 1.f;
+    const float tanHalfFov = tanf(qDegreesToRadians(22.5f)); // half of 45° FOV
+    QVector3D camDir = QVector3D(nx * tanHalfFov * aspect,
+                                  ny * tanHalfFov,
+                                  -1.f).normalized();
+    QMatrix4x4 invView = m_view.inverted();
+    QVector3D rayOrig = m_cameraEye;
+    QVector3D rayDir  = invView.mapVector(camDir).normalized();
 
     float bestWorldT = FLT_MAX;
     int   bestIdx = -1;
