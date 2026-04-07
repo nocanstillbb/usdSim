@@ -1264,6 +1264,21 @@ static void genMesh(const UsdGeomMesh &mesh,
             if (n.GetLengthSq() > 1e-10f) n.Normalize();
             else n = GfVec3f(0, 1, 0);
         }
+
+        // Fix inverted normals: if majority of normals point toward the mesh
+        // centroid they are inside-out (CW winding under rightHanded convention).
+        GfVec3f centroid(0);
+        for (const auto &p : points) centroid += p;
+        centroid /= float(points.size());
+        int inwardCount = 0;
+        for (size_t i = 0; i < points.size(); ++i) {
+            if (GfDot(normals[i], centroid - points[i]) > 0)
+                ++inwardCount;
+        }
+        if (inwardCount > int(points.size()) / 2) {
+            for (auto &n : normals) n = -n;
+        }
+
         normInterp = UsdGeomTokens->vertex;
         hasNormals = true;
     }
