@@ -19,7 +19,8 @@ struct MeshData {
     bool             lineOnly = false; // true = render with Lines topology (light gizmos)
     bool             isLightGizmo = false; // true = only draw when selected
     bool             isCollision = false; // true = collision-only (purpose=guide), wireframe only
-    bool             hasCollisionAPI = false; // true = has PhysicsCollisionAPI, draw green wireframe overlay
+    bool             hasCollisionAPI = false; // true = has PhysicsCollisionAPI, draw wireframe overlay
+    bool             isFixedCollision = false; // true = static collider (no RigidBodyAPI), purple wireframe
     QVector<float>   collisionWireVerts;   // sparse wireframe [x,y,z,nx,ny,nz]
     QVector<quint32> collisionWireIndices; // line pairs
 };
@@ -128,6 +129,8 @@ public:
     QVector3D cameraEye() const { return m_cameraEye; }
     QSet<int> selectedMeshes() const { return m_selectedMeshes; }
     float unitScale() const { return m_unitScale; }
+    float sceneRadius() const { return m_sceneRadius; }
+    QVector3D sceneTarget() const { return m_target; }
 
 signals:
     void documentChanged();

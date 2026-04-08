@@ -22,7 +22,10 @@ struct Light {
 layout(std140, binding = 1) uniform SceneLights {
     Light lights[MAX_LIGHTS];
     ivec4 numLights; // x=count
+    mat4 lightVP;        // light view-projection for shadow mapping
+    vec4 shadowParams;   // x=texelW, y=texelH, z=bias, w=enabled
 };
+layout(binding = 2) uniform sampler2D shadowMap;
 
 void main()
 {
@@ -73,6 +76,36 @@ void main()
                 ambient += lcol * mix(0.3, 1.0, hemi);
             }
         }
+
+        // Shadow mapping (PCF 3x3) with slope-scaled bias
+        float shadow = 0.0;
+        if (shadowParams.w > 0.5) {
+            vec4 lsPos = lightVP * vec4(vWorldPos, 1.0);
+            vec3 proj = lsPos.xyz / lsPos.w;
+            proj = proj * 0.5 + 0.5;
+            if (proj.z > 0.0 && proj.z <= 1.0 &&
+                proj.x >= 0.0 && proj.x <= 1.0 &&
+                proj.y >= 0.0 && proj.y <= 1.0)
+            {
+                // Slope-scaled bias: large for grazing angles, tiny for perpendicular
+                float maxBias = shadowParams.z;
+                float minBias = maxBias * 0.1;
+                // Approximate light direction from light-space Z axis
+                vec3 lightFwd = normalize(vec3(lightVP[0][2], lightVP[1][2], lightVP[2][2]));
+                float cosTheta = abs(dot(N, lightFwd));
+                float bias = mix(maxBias, minBias, cosTheta);
+
+                vec2 texelSize = shadowParams.xy;
+                for (int x = -1; x <= 1; ++x) {
+                    for (int y = -1; y <= 1; ++y) {
+                        float d = texture(shadowMap, proj.xy + vec2(x, y) * texelSize).r;
+                        shadow += (proj.z - bias > d) ? 1.0 : 0.0;
+                    }
+                }
+                shadow /= 9.0;
+            }
+        }
+        diffuse *= (1.0 - shadow);
 
         vec3 lit = vColor * (ambient + diffuse);
         // Reinhard tonemapping: prevents blowout while preserving color

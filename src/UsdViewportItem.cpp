@@ -72,6 +72,9 @@ private:
         bool isLightGizmo = false;
         bool isCollision = false;
         bool hasCollisionAPI = false;
+        bool isFixedCollision = false;
+        QRhiBuffer *shadowUbuf = nullptr;            // shadow pass per-mesh UBO
+        QRhiShaderResourceBindings *shadowSrb = nullptr;
         QRhiBuffer *colUbuf = nullptr;              // collision wireframe UBO
         QRhiShaderResourceBindings *colSrb = nullptr;
         QRhiBuffer *colVbuf = nullptr;              // sparse wireframe vertices
@@ -153,6 +156,18 @@ private:
     QRhiShaderResourceBindings *m_outlineSrb = nullptr;
     QShader m_outlineVs, m_outlineFs;
     QSize m_maskSize;
+
+    // Shadow map
+    QRhiTexture *m_shadowColorTex = nullptr;  // dummy color for FBO completeness
+    QRhiTexture *m_shadowTex = nullptr;
+    QRhiTextureRenderTarget *m_shadowRT = nullptr;
+    QRhiRenderPassDescriptor *m_shadowRpDesc = nullptr;
+    QRhiGraphicsPipeline *m_shadowPipeline = nullptr;
+    QRhiSampler *m_shadowSampler = nullptr;
+    QShader m_shadowVs, m_shadowFs;
+    QMatrix4x4 m_lightVP;
+    QVector3D m_sceneTarget;
+    float m_sceneRadius = 10.f;
 };
 
 // ================================================================
@@ -1751,6 +1766,7 @@ void UsdViewportItem::buildMeshes()
         // PhysicsMeshCollisionAPI = convex hull source mesh → skip (not the actual shape).
         bool isCollision = false;
         bool hasCollisionAPI = false;
+        bool isFixedCollision = false;
         if (!isLightType) {
             bool hasMeshCollisionAPI = false;
             for (const TfToken &schema : prim.GetAppliedSchemas()) {
@@ -1762,6 +1778,19 @@ void UsdViewportItem::buildMeshes()
             }
             if (hasMeshCollisionAPI)
                 hasCollisionAPI = false;
+            // Detect fixed vs movable: walk up to find PhysicsRigidBodyAPI
+            if (hasCollisionAPI) {
+                isFixedCollision = true;
+                for (UsdPrim p = prim; p; p = p.GetParent()) {
+                    for (const TfToken &schema : p.GetAppliedSchemas()) {
+                        if (schema.GetString().find("PhysicsRigidBodyAPI") != std::string::npos) {
+                            isFixedCollision = false;
+                            break;
+                        }
+                    }
+                    if (!isFixedCollision) break;
+                }
+            }
         }
 
         // Skip prims with purpose != "default" (guide/proxy/render),
@@ -1893,8 +1922,10 @@ void UsdViewportItem::buildMeshes()
         md.isLightGizmo = isLight;
         md.isCollision = isCollision;
         md.hasCollisionAPI = hasCollisionAPI || isCollision;
+        md.isFixedCollision = isFixedCollision;
         if (isCollision) {
-            md.color = QVector3D(0.0f, 0.8f, 0.0f); // green wireframe
+            md.color = isFixedCollision ? QVector3D(0.6f, 0.2f, 0.8f)   // purple = fixed
+                                        : QVector3D(0.0f, 0.8f, 0.0f);  // green  = movable
         } else if (isLight) {
             md.color = lightColor;
         } else if (type == "Camera") {
@@ -3154,6 +3185,13 @@ UsdViewportRenderer::~UsdViewportRenderer()
     delete m_maskRT;
     delete m_maskDS;
     delete m_maskTex;
+    // Shadow map
+    delete m_shadowPipeline;
+    delete m_shadowSampler;
+    delete m_shadowRpDesc;
+    delete m_shadowRT;
+    delete m_shadowTex;
+    delete m_shadowColorTex;
 }
 
 void UsdViewportRenderer::destroyMeshes()
@@ -3164,6 +3202,7 @@ void UsdViewportRenderer::destroyMeshes()
         delete m.ubuf; delete m.srb;
         delete m.ibufEdge;
         delete m.wireUbuf; delete m.wireSrb;
+        delete m.shadowUbuf; delete m.shadowSrb;
         delete m.colUbuf; delete m.colSrb;
         delete m.colVbuf; delete m.colIbuf;
     }
@@ -3197,7 +3236,11 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
         QRhiShaderResourceBinding::uniformBuffer(
             1,
             QRhiShaderResourceBinding::FragmentStage,
-            m_lightUbuf)
+            m_lightUbuf),
+        QRhiShaderResourceBinding::sampledTexture(
+            2,
+            QRhiShaderResourceBinding::FragmentStage,
+            m_shadowTex, m_shadowSampler)
     });
     dst.srb->create();
 
@@ -3205,6 +3248,20 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
     if (!src.lineOnly)
         batch->uploadStaticBuffer(dst.vbufSmooth, src.smoothVertices.constData());
     batch->uploadStaticBuffer(dst.ibuf, src.indices.constData());
+
+    // Shadow pass per-mesh UBO + SRB
+    if (!src.lineOnly) {
+        dst.shadowUbuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 160);
+        dst.shadowUbuf->create();
+        dst.shadowSrb = rhi->newShaderResourceBindings();
+        dst.shadowSrb->setBindings({
+            QRhiShaderResourceBinding::uniformBuffer(
+                0,
+                QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
+                dst.shadowUbuf)
+        });
+        dst.shadowSrb->create();
+    }
 
     // Per-mesh wire UBO + SRB for outline rendering (not needed for lineOnly)
     if (!src.lineOnly) {
@@ -3231,6 +3288,7 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
     dst.isLightGizmo = src.isLightGizmo;
     dst.isCollision = src.isCollision;
     dst.hasCollisionAPI = src.hasCollisionAPI;
+    dst.isFixedCollision = src.isFixedCollision;
 
     // Collision wireframe: dedicated UBO + optional sparse wireframe buffers
     bool hasColWire = src.hasCollisionAPI &&
@@ -3336,11 +3394,35 @@ void UsdViewportRenderer::initialize(QRhiCommandBuffer *)
     m_fs = loadShader(":/shaders/viewport.frag.qsb");
     m_outlineVs = loadShader(":/shaders/outline_post.vert.qsb");
     m_outlineFs = loadShader(":/shaders/outline_post.frag.qsb");
+    m_shadowVs = loadShader(":/shaders/shadow.vert.qsb");
+    m_shadowFs = loadShader(":/shaders/shadow.frag.qsb");
 
-    // Scene light UBO (std140: 48 bytes/light * 16 + 16 = 784)
+    // Scene light UBO (std140: 48*16 + 16 + 64(lightVP) + 16(shadowParams) = 864)
     QRhi *rhi = renderTarget()->rhi();
-    m_lightUbuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 784);
+    m_lightUbuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 864);
     m_lightUbuf->create();
+
+    // Shadow map resources (2048x2048 depth texture + dummy color for FBO completeness)
+    constexpr int kShadowSize = 2048;
+    m_shadowColorTex = rhi->newTexture(QRhiTexture::R8, QSize(kShadowSize, kShadowSize), 1,
+                                       QRhiTexture::RenderTarget);
+    m_shadowColorTex->create();
+    m_shadowTex = rhi->newTexture(QRhiTexture::D32F, QSize(kShadowSize, kShadowSize), 1,
+                                  QRhiTexture::RenderTarget);
+    m_shadowTex->create();
+
+    m_shadowSampler = rhi->newSampler(
+        QRhiSampler::Nearest, QRhiSampler::Nearest, QRhiSampler::None,
+        QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
+    m_shadowSampler->create();
+
+    QRhiColorAttachment shadowColorAtt(m_shadowColorTex);
+    QRhiTextureRenderTargetDescription shadowRtDesc(shadowColorAtt);
+    shadowRtDesc.setDepthTexture(m_shadowTex);
+    m_shadowRT = rhi->newTextureRenderTarget(shadowRtDesc);
+    m_shadowRpDesc = m_shadowRT->newCompatibleRenderPassDescriptor();
+    m_shadowRT->setRenderPassDescriptor(m_shadowRpDesc);
+    m_shadowRT->create();
 }
 
 void UsdViewportRenderer::synchronize(QQuickRhiItem *item)
@@ -3351,6 +3433,9 @@ void UsdViewportRenderer::synchronize(QQuickRhiItem *item)
     m_selectedIndices = vp->selectedMeshes();
     m_unitScale = vp->unitScale();
     m_cameraEye = vp->cameraEye();
+    m_sceneTarget = vp->sceneTarget();  // already in unit-scaled world space
+    m_sceneRadius = vp->sceneRadius();  // already in unit-scaled world space
+    if (m_sceneRadius < 0.1f) m_sceneRadius = 0.1f;
     if (vp->meshDirty()) {
         m_pending = vp->meshes();
         m_sceneLights = vp->lights();
@@ -3426,6 +3511,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         delete m_lineMeshPipeline; m_lineMeshPipeline = nullptr;
         delete m_collisionPipeline; m_collisionPipeline = nullptr;
         delete m_maskPipeline; m_maskPipeline = nullptr;
+        delete m_shadowPipeline; m_shadowPipeline = nullptr;
         m_meshes.resize(m_pending.size());
         for (int i = 0; i < m_pending.size(); i++)
             uploadMesh(m_meshes[i], m_pending[i], upd);
@@ -3509,6 +3595,31 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         m_pipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
         m_pipeline->setSampleCount(renderTarget()->sampleCount());
         m_pipeline->create();
+
+        // Shadow map pipeline (depth-only, cull front to reduce acne)
+        if (solidIdx >= 0 && m_shadowRpDesc) {
+            m_shadowPipeline = rhi->newGraphicsPipeline();
+            QRhiGraphicsPipeline::TargetBlend shadowBlend;
+            shadowBlend.enable = false;
+            shadowBlend.colorWrite = {};  // no color writes (dummy attachment)
+            m_shadowPipeline->setTargetBlends({shadowBlend});
+            m_shadowPipeline->setDepthTest(true);
+            m_shadowPipeline->setDepthWrite(true);
+            m_shadowPipeline->setCullMode(QRhiGraphicsPipeline::None);
+            m_shadowPipeline->setShaderStages({
+                { QRhiShaderStage::Vertex,   m_shadowVs },
+                { QRhiShaderStage::Fragment, m_shadowFs }
+            });
+            m_shadowPipeline->setVertexInputLayout(il);
+            m_shadowPipeline->setShaderResourceBindings(m_meshes[solidIdx].shadowSrb);
+            m_shadowPipeline->setRenderPassDescriptor(m_shadowRpDesc);
+            m_shadowPipeline->setSampleCount(1);
+            if (!m_shadowPipeline->create()) {
+                qWarning() << "Shadow pipeline creation FAILED";
+                delete m_shadowPipeline;
+                m_shadowPipeline = nullptr;
+            }
+        }
 
         // Line mesh pipeline (Lines topology, depth test ON, for light gizmo wireframes)
         m_lineMeshPipeline = rhi->newGraphicsPipeline();
@@ -3812,11 +3923,70 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         float mvp[16], model[16], color[4], lightDir[4];
     };
 
-    // Upload scene lights UBO
+    // Compute light view-projection for shadow mapping
+    // Supports directional lights (ortho) and point/area lights (perspective).
+    {
+        QMatrix4x4 lightView, lightProj;
+        bool foundLight = false;
+
+        // Prefer first directional light
+        for (const auto &l : m_sceneLights) {
+            if (l.type == 0) { // distant light
+                QVector3D dir = l.direction.normalized();
+                QVector3D up = (qAbs(dir.y()) < 0.99f) ? QVector3D(0,1,0) : QVector3D(1,0,0);
+                lightView.lookAt(m_sceneTarget + dir * m_sceneRadius * 2.f,
+                                 m_sceneTarget, up);
+                float r = m_sceneRadius * 1.5f;
+                lightProj.ortho(-r, r, -r, r, 0.01f, m_sceneRadius * 4.f);
+                foundLight = true;
+                break;
+            }
+        }
+        // Fall back to first point/area light (perspective shadow map)
+        if (!foundLight) {
+            for (const auto &l : m_sceneLights) {
+                if (l.type == 1) { // point / area light
+                    QVector3D toScene = (m_sceneTarget - l.position);
+                    float dist = toScene.length();
+                    if (dist < 1e-4f) dist = 1.f;
+                    QVector3D dir = toScene.normalized();
+                    QVector3D up = (qAbs(dir.y()) < 0.99f) ? QVector3D(0,1,0) : QVector3D(1,0,0);
+                    lightView.lookAt(l.position, m_sceneTarget, up);
+                    float nearP = qMax(0.01f, dist - m_sceneRadius * 2.f);
+                    float farP  = dist + m_sceneRadius * 2.f;
+                    // FOV wide enough to cover the scene bounding sphere
+                    float halfAngle = qAtan(m_sceneRadius * 1.5f / dist);
+                    float fov = qRadiansToDegrees(halfAngle) * 2.f;
+                    fov = qBound(10.f, fov, 120.f);
+                    lightProj.perspective(fov, 1.0f, nearP, farP);
+                    qDebug() << "Shadow: SphereLight pos=" << l.position
+                             << "sceneTarget=" << m_sceneTarget
+                             << "dist=" << dist << "radius=" << m_sceneRadius
+                             << "fov=" << fov << "near=" << nearP << "far=" << farP;
+                    foundLight = true;
+                    break;
+                }
+            }
+        }
+        // Ultimate fallback: default directional
+        if (!foundLight) {
+            QVector3D dir = QVector3D(0.6f, 1.f, 0.8f).normalized();
+            QVector3D up(0, 0, 1);
+            lightView.lookAt(m_sceneTarget + dir * m_sceneRadius * 2.f,
+                             m_sceneTarget, up);
+            float r = m_sceneRadius * 1.5f;
+            lightProj.ortho(-r, r, -r, r, 0.01f, m_sceneRadius * 4.f);
+        }
+        m_lightVP = rhi->clipSpaceCorrMatrix() * lightProj * lightView;
+    }
+
+    // Upload scene lights UBO (extended with shadow data)
     {
         struct alignas(16) LightUBuf {
             struct { float posType[4]; float dirRadius[4]; float color[4]; } lights[16];
-            int numLights[4];
+            int numLights[4];       // offset 768
+            float lightVP[16];      // offset 784
+            float shadowParams[4];  // offset 848
         };
         LightUBuf lub{};
         int count = qMin(m_sceneLights.size(), 16);
@@ -3836,6 +4006,12 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             lub.lights[i].color[3] = 0.f;
         }
         lub.numLights[0] = count;
+        memcpy(lub.lightVP, m_lightVP.constData(), 64);
+        constexpr float kShadowSize = 2048.f;
+        lub.shadowParams[0] = 1.f / kShadowSize; // texelW
+        lub.shadowParams[1] = 1.f / kShadowSize; // texelH
+        lub.shadowParams[2] = 0.002f;             // max bias (slope-scaled in shader)
+        lub.shadowParams[3] = m_shadowPipeline ? 1.f : 0.f; // enabled
         upd->updateDynamicBuffer(m_lightUbuf, 0, sizeof(LightUBuf), &lub);
     }
 
@@ -3853,6 +4029,14 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         ub.lightDir[2] = m_cameraEye.z(); ub.lightDir[3] = 0.f;
         upd->updateDynamicBuffer(m.ubuf, 0, sizeof(UBuf), &ub);
 
+        // Shadow pass UBO: lightVP * model as mvp
+        if (m.shadowUbuf) {
+            UBuf sub{};
+            QMatrix4x4 shadowMVP = m_lightVP * m.transform;
+            memcpy(sub.mvp, shadowMVP.constData(), 64);
+            upd->updateDynamicBuffer(m.shadowUbuf, 0, sizeof(UBuf), &sub);
+        }
+
         // Pre-upload outline UBO for selected meshes (skip lineOnly — no stencil outline)
         if (m_selectedIndices.contains(i) && !m.lineOnly && m.wireUbuf) {
             UBuf wub{};
@@ -3866,13 +4050,18 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             upd->updateDynamicBuffer(m.wireUbuf, 0, sizeof(UBuf), &wub);
         }
 
-        // Pre-upload collision wireframe UBO (green flat, dedicated buffer)
+        // Pre-upload collision wireframe UBO (purple=fixed, green=movable)
         if (m.hasCollisionAPI && m.colUbuf) {
             UBuf cub{};
             memcpy(cub.mvp,   mvp.constData(),          64);
             memcpy(cub.model, m.transform.constData(),   64);
-            cub.color[0] = 0.f; cub.color[1] = 0.8f;
-            cub.color[2] = 0.f; cub.color[3] = 0.f;  // flat green
+            if (m.isFixedCollision) {
+                cub.color[0] = 0.6f; cub.color[1] = 0.2f;
+                cub.color[2] = 0.8f; cub.color[3] = 0.f;  // flat purple
+            } else {
+                cub.color[0] = 0.f; cub.color[1] = 0.8f;
+                cub.color[2] = 0.f; cub.color[3] = 0.f;  // flat green
+            }
             memset(cub.lightDir, 0, 16);
             upd->updateDynamicBuffer(m.colUbuf, 0, sizeof(UBuf), &cub);
         }
@@ -3972,11 +4161,30 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         upd->updateDynamicBuffer(m_outlineUbuf, 0, sizeof(OutUBuf), &ou);
     }
 
+    // --- Shadow pass: render scene depth from light's perspective ---
+    QRhiResourceUpdateBatch *updAfterShadow = upd;
+    if (m_shadowRT && m_shadowPipeline) {
+        cb->beginPass(m_shadowRT, QColor(), {1.f, 0}, upd);
+        updAfterShadow = nullptr; // upd consumed by shadow pass
+        cb->setGraphicsPipeline(m_shadowPipeline);
+        cb->setViewport(QRhiViewport(0, 0, 2048, 2048));
+        for (int i = 0; i < m_meshes.size(); ++i) {
+            auto &m = m_meshes[i];
+            if (m.lineOnly || m.isCollision || m.isLightGizmo) continue;
+            if (!m.shadowSrb) continue;
+            cb->setShaderResources(m.shadowSrb);
+            QRhiCommandBuffer::VertexInput vi(m.vbuf, 0);
+            cb->setVertexInput(0, 1, &vi, m.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
+            cb->drawIndexed(m.indexCount);
+        }
+        cb->endPass();
+    }
+
     // --- Mask pass: render selected meshes to mask texture ---
-    QRhiResourceUpdateBatch *updForMain = upd;
+    QRhiResourceUpdateBatch *updForMain = updAfterShadow;
     if (hasOutlineSelection && m_maskRT && m_maskPipeline) {
-        cb->beginPass(m_maskRT, QColor(0, 0, 0, 0), {1.f, 0}, upd);
-        updForMain = nullptr; // upd consumed by mask pass
+        cb->beginPass(m_maskRT, QColor(0, 0, 0, 0), {1.f, 0}, updAfterShadow);
+        updForMain = nullptr; // consumed by mask pass
         cb->setGraphicsPipeline(m_maskPipeline);
         cb->setViewport(QRhiViewport(0, 0, sz.width(), sz.height()));
         for (int selIdx : m_selectedIndices) {
