@@ -3942,27 +3942,19 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
                 break;
             }
         }
-        // Fall back to first point/area light (perspective shadow map)
+        // Fall back to first point/area light — treat as directional from
+        // light position toward scene center (ortho covers entire scene uniformly)
         if (!foundLight) {
             for (const auto &l : m_sceneLights) {
                 if (l.type == 1) { // point / area light
-                    QVector3D toScene = (m_sceneTarget - l.position);
-                    float dist = toScene.length();
-                    if (dist < 1e-4f) dist = 1.f;
-                    QVector3D dir = toScene.normalized();
+                    QVector3D dir = (m_sceneTarget - l.position);
+                    if (dir.lengthSquared() < 1e-6f) dir = QVector3D(0, 0, -1);
+                    dir.normalize();
                     QVector3D up = (qAbs(dir.y()) < 0.99f) ? QVector3D(0,1,0) : QVector3D(1,0,0);
-                    lightView.lookAt(l.position, m_sceneTarget, up);
-                    float nearP = qMax(0.01f, dist - m_sceneRadius * 2.f);
-                    float farP  = dist + m_sceneRadius * 2.f;
-                    // FOV wide enough to cover the scene bounding sphere
-                    float halfAngle = qAtan(m_sceneRadius * 1.5f / dist);
-                    float fov = qRadiansToDegrees(halfAngle) * 2.f;
-                    fov = qBound(10.f, fov, 120.f);
-                    lightProj.perspective(fov, 1.0f, nearP, farP);
-                    qDebug() << "Shadow: SphereLight pos=" << l.position
-                             << "sceneTarget=" << m_sceneTarget
-                             << "dist=" << dist << "radius=" << m_sceneRadius
-                             << "fov=" << fov << "near=" << nearP << "far=" << farP;
+                    QVector3D eye = m_sceneTarget - dir * m_sceneRadius * 2.f;
+                    lightView.lookAt(eye, m_sceneTarget, up);
+                    float r = m_sceneRadius * 1.5f;
+                    lightProj.ortho(-r, r, -r, r, 0.01f, m_sceneRadius * 4.f);
                     foundLight = true;
                     break;
                 }
