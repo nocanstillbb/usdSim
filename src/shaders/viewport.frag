@@ -81,20 +81,21 @@ void main()
                         else {
                             float projX = dot(offset, right);
                             float projY = dot(offset, up2);
-                            // Light half-size as cone tangent: at distance d,
-                            // lit area = (2*d*hw) × (2*d*hh) → projector effect
+                            // Fixed-size cutoff: light only within W×H area
                             float hw = lights[i].shapeSize.x * 0.5;
                             float hh = lights[i].shapeSize.y * 0.5;
                             if (subtype == 1) {
-                                float fx = abs(projX) / (projDist * hw);
-                                float fy = abs(projY) / (projDist * hh);
+                                // Rect: fixed W×H regardless of distance
+                                float fx = abs(projX) / hw;
+                                float fy = abs(projY) / hh;
                                 float rectFade = (1.0 - smoothstep(0.9, 1.0, fx))
                                                * (1.0 - smoothstep(0.9, 1.0, fy));
                                 atten *= hemi * rectFade;
                             } else {
-                                // Disk: same principle with radius
-                                float r = lights[i].shapeSize.x * 0.5;
-                                float fr = length(vec2(projX, projY)) / (projDist * r);
+                                // Disk: fixed circular cutoff at radius
+                                // shapeSize.x already stores radius (not diameter)
+                                float r = lights[i].shapeSize.x;
+                                float fr = length(vec2(projX, projY)) / r;
                                 float diskFade = 1.0 - smoothstep(0.9, 1.0, fr);
                                 atten *= hemi * diskFade;
                             }
