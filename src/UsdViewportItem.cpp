@@ -1255,45 +1255,94 @@ static void genMesh(const UsdGeomMesh &mesh,
             hasNormals = false; // discard uniform normals
     }
 
-    // Compute area-weighted smooth vertex normals when authored normals are
-    // missing or degenerate. This gives correct shading for cloth meshes
-    // and any other mesh without reliable normal data.
+    // Compute crease-angle smooth normals when authored normals are missing or
+    // degenerate.  Hard edges (angle between adjacent faces > 60°) are preserved;
+    // faces within the threshold are blended with area weighting.
     if (!hasNormals) {
-        normals = VtArray<GfVec3f>(points.size(), GfVec3f(0));
-        int offset = 0;
-        for (int fvc : fvcArray) {
-            if (fvc < 3) { offset += fvc; continue; }
-            const GfVec3f &p0 = points[fviArray[offset]];
-            const GfVec3f &p1 = points[fviArray[offset + 1]];
-            const GfVec3f &p2 = points[fviArray[offset + 2]];
-            GfVec3f fn = GfCross(p1 - p0, p2 - p0); // length = 2*area → area-weighted
-            for (int k = 0; k < fvc; ++k) {
-                int vi = fviArray[offset + k];
-                if (vi >= 0 && vi < (int)normals.size())
-                    normals[vi] += fn;
+        int nFaces = int(fvcArray.size());
+
+        // Step 1: per-face area-weighted normals (not yet normalised)
+        std::vector<GfVec3f> faceNormW(nFaces, GfVec3f(0)); // area-weighted
+        std::vector<GfVec3f> faceNorm (nFaces, GfVec3f(0,1,0)); // unit
+        {
+            int off = 0;
+            for (int f = 0; f < nFaces; ++f) {
+                int fvc = fvcArray[f];
+                if (fvc >= 3) {
+                    const GfVec3f &p0 = points[fviArray[off]];
+                    const GfVec3f &p1 = points[fviArray[off + 1]];
+                    const GfVec3f &p2 = points[fviArray[off + 2]];
+                    GfVec3f fn = GfCross(p1 - p0, p2 - p0);
+                    faceNormW[f] = fn;
+                    if (fn.GetLengthSq() > 1e-10f)
+                        faceNorm[f] = fn.GetNormalized();
+                }
+                off += fvc;
             }
-            offset += fvc;
-        }
-        for (auto &n : normals) {
-            if (n.GetLengthSq() > 1e-10f) n.Normalize();
-            else n = GfVec3f(0, 1, 0);
         }
 
-        // Fix inverted normals: if majority of normals point toward the mesh
-        // centroid they are inside-out (CW winding under rightHanded convention).
-        GfVec3f centroid(0);
-        for (const auto &p : points) centroid += p;
-        centroid /= float(points.size());
-        int inwardCount = 0;
-        for (size_t i = 0; i < points.size(); ++i) {
-            if (GfDot(normals[i], centroid - points[i]) > 0)
-                ++inwardCount;
-        }
-        if (inwardCount > int(points.size()) / 2) {
-            for (auto &n : normals) n = -n;
+        // Step 2: fix globally inverted winding (CW mesh → flip all face normals)
+        {
+            GfVec3f centroid(0);
+            for (const auto &p : points) centroid += p;
+            centroid /= float(points.size());
+            int inward = 0, total = 0;
+            int off = 0;
+            for (int f = 0; f < nFaces; ++f) {
+                if (fvcArray[f] >= 3) {
+                    GfVec3f fc(0);
+                    for (int k = 0; k < fvcArray[f]; ++k)
+                        fc += points[fviArray[off + k]];
+                    fc /= float(fvcArray[f]);
+                    if (GfDot(faceNorm[f], centroid - fc) > 0) ++inward;
+                    ++total;
+                }
+                off += fvcArray[f];
+            }
+            if (total > 0 && inward > total / 2) {
+                for (auto &n : faceNorm)  n = -n;
+                for (auto &n : faceNormW) n = -n;
+            }
         }
 
-        normInterp = UsdGeomTokens->vertex;
+        // Step 3: build vertex → face list
+        std::vector<std::vector<int>> vtxFaces(points.size());
+        {
+            int off = 0;
+            for (int f = 0; f < nFaces; ++f) {
+                for (int k = 0; k < fvcArray[f]; ++k) {
+                    int vi = fviArray[off + k];
+                    if (vi >= 0 && vi < (int)points.size())
+                        vtxFaces[vi].push_back(f);
+                }
+                off += fvcArray[f];
+            }
+        }
+
+        // Step 4: face-varying crease-angle normals (cos 60° = 0.5 threshold)
+        constexpr float kCreaseCos = 0.5f;
+        normals.resize(fviArray.size());
+        int off = 0;
+        for (int f = 0; f < nFaces; ++f) {
+            int fvc = fvcArray[f];
+            const GfVec3f &fn = faceNorm[f];
+            const GfVec3f &fnW = faceNormW[f];
+            for (int k = 0; k < fvc; ++k) {
+                int vi = fviArray[off + k];
+                GfVec3f accum(0);
+                if (vi >= 0 && vi < (int)points.size()) {
+                    for (int adjF : vtxFaces[vi]) {
+                        if (GfDot(fn, faceNorm[adjF]) >= kCreaseCos)
+                            accum += faceNormW[adjF];
+                    }
+                }
+                if (accum.GetLengthSq() < 1e-10f) accum = fnW;
+                if (accum.GetLengthSq() > 1e-10f) accum.Normalize();
+                normals[off + k] = accum;
+            }
+            off += fvc;
+        }
+        normInterp = UsdGeomTokens->faceVarying;
         hasNormals = true;
     }
 
