@@ -2071,22 +2071,30 @@ void UsdViewportItem::buildMeshes()
             float radiusScene = 0.5f;  // in scene units
             float areaScene = 0.f;     // projected area for intensity scaling
             if (type == "SphereLight") {
+                ld.subtype = 0;
                 double r = 0.5;
                 UsdLuxSphereLight(prim).GetRadiusAttr().Get(&r);
                 radiusScene = float(r);
                 areaScene = float(M_PI) * radiusScene * radiusScene;
             } else if (type == "RectLight") {
+                ld.subtype = 1;
                 float w = 1.0f, h = 1.0f;
                 UsdLuxRectLight(prim).GetWidthAttr().Get(&w);
                 UsdLuxRectLight(prim).GetHeightAttr().Get(&h);
+                ld.width = w * m_unitScale;
+                ld.height = h * m_unitScale;
                 radiusScene = std::sqrt(w * h / float(M_PI)); // equivalent radius
                 areaScene = w * h;
             } else if (type == "DiskLight") {
+                ld.subtype = 2;
                 float r = 0.5f;
                 UsdLuxDiskLight(prim).GetRadiusAttr().Get(&r);
+                ld.width = r * m_unitScale;
+                ld.height = r * m_unitScale;
                 radiusScene = r;
                 areaScene = float(M_PI) * radiusScene * radiusScene;
             } else if (type == "CylinderLight") {
+                ld.subtype = 3;
                 float r = 0.5f, len = 1.0f;
                 UsdLuxCylinderLight(prim).GetRadiusAttr().Get(&r);
                 UsdLuxCylinderLight(prim).GetLengthAttr().Get(&len);
@@ -3397,9 +3405,9 @@ void UsdViewportRenderer::initialize(QRhiCommandBuffer *)
     m_shadowVs = loadShader(":/shaders/shadow.vert.qsb");
     m_shadowFs = loadShader(":/shaders/shadow.frag.qsb");
 
-    // Scene light UBO (std140: 48*16 + 16 + 64(lightVP) + 16(shadowParams) = 864)
+    // Scene light UBO (std140: 64*16 + 16 + 64(lightVP) + 16(shadowParams) = 1120)
     QRhi *rhi = renderTarget()->rhi();
-    m_lightUbuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 864);
+    m_lightUbuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 1120);
     m_lightUbuf->create();
 
     // Shadow map resources (2048x2048 depth texture + dummy color for FBO completeness)
@@ -3942,19 +3950,24 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
                 break;
             }
         }
-        // Fall back to first point/area light — treat as directional from
-        // light position toward scene center (ortho covers entire scene uniformly)
+        // Fall back to first point/area light (ortho, full scene coverage).
+        // Eye at light position so only objects in front cast shadows.
+        // Disk/Rect use emission direction; Sphere/Cylinder use light→scene.
         if (!foundLight) {
             for (const auto &l : m_sceneLights) {
-                if (l.type == 1) { // point / area light
-                    QVector3D dir = (m_sceneTarget - l.position);
-                    if (dir.lengthSquared() < 1e-6f) dir = QVector3D(0, 0, -1);
-                    dir.normalize();
+                if (l.type == 1) {
+                    QVector3D dir;
+                    if (l.direction.lengthSquared() > 0.001f)
+                        dir = l.direction.normalized();   // disk/rect emission dir
+                    else
+                        dir = (m_sceneTarget - l.position).normalized(); // sphere/cyl
+                    if (dir.lengthSquared() < 0.5f) dir = QVector3D(0, -1, 0);
                     QVector3D up = (qAbs(dir.y()) < 0.99f) ? QVector3D(0,1,0) : QVector3D(1,0,0);
-                    QVector3D eye = m_sceneTarget - dir * m_sceneRadius * 2.f;
-                    lightView.lookAt(eye, m_sceneTarget, up);
+                    // Eye at light: near=0 clips behind the light
+                    lightView.lookAt(l.position, l.position + dir, up);
                     float r = m_sceneRadius * 1.5f;
-                    lightProj.ortho(-r, r, -r, r, 0.01f, m_sceneRadius * 4.f);
+                    float farDist = (m_sceneTarget - l.position).length() + m_sceneRadius * 2.f;
+                    lightProj.ortho(-r, r, -r, r, 0.f, farDist);
                     foundLight = true;
                     break;
                 }
@@ -3975,10 +3988,13 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
     // Upload scene lights UBO (extended with shadow data)
     {
         struct alignas(16) LightUBuf {
-            struct { float posType[4]; float dirRadius[4]; float color[4]; } lights[16];
-            int numLights[4];       // offset 768
-            float lightVP[16];      // offset 784
-            float shadowParams[4];  // offset 848
+            struct {
+                float posType[4]; float dirRadius[4];
+                float color[4];   float shapeSize[4];
+            } lights[16];
+            int numLights[4];       // offset 1024
+            float lightVP[16];      // offset 1040
+            float shadowParams[4];  // offset 1104
         };
         LightUBuf lub{};
         int count = qMin(m_sceneLights.size(), 16);
@@ -3995,7 +4011,9 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             lub.lights[i].color[0] = l.color.x();
             lub.lights[i].color[1] = l.color.y();
             lub.lights[i].color[2] = l.color.z();
-            lub.lights[i].color[3] = 0.f;
+            lub.lights[i].color[3] = float(l.subtype);
+            lub.lights[i].shapeSize[0] = l.width;
+            lub.lights[i].shapeSize[1] = l.height;
         }
         lub.numLights[0] = count;
         memcpy(lub.lightVP, m_lightVP.constData(), 64);

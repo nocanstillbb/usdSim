@@ -52,10 +52,13 @@ enum RotatePartId {
 
 struct LightData {
     int type;           // 0=distant, 1=point, 2=dome
+    int subtype = 0;    // 0=sphere, 1=rect, 2=disk, 3=cylinder
     QVector3D position; // world-space (point lights)
-    QVector3D direction;// world-space (distant light)
+    QVector3D direction;// world-space (distant light / emission dir)
     QVector3D color;    // effective color: color * intensity * 2^exposure
     float radius;       // for point light attenuation
+    float width = 0.f;  // rect/disk shape width (world-scaled)
+    float height = 0.f; // rect shape height (world-scaled)
     QString primPath;   // USD prim path (for gizmo live-update matching)
 };
 

@@ -17,7 +17,8 @@ layout(std140, binding = 0) uniform PerObject {
 struct Light {
     vec4 posType;    // xyz=position, w=type (0=distant, 1=point, 2=dome)
     vec4 dirRadius;  // xyz=direction, w=radius
-    vec4 color;      // rgb=effective color, a=unused
+    vec4 color;      // rgb=effective color, a=subtype (0=sphere,1=rect,2=disk,3=cyl)
+    vec4 shapeSize;  // x=width, y=height, z=unused, w=unused
 };
 layout(std140, binding = 1) uniform SceneLights {
     Light lights[MAX_LIGHTS];
@@ -52,22 +53,55 @@ void main()
                 float d = max(dot(N, L), 0.0);
                 diffuse += lcol * d;
             } else if (ltype == 1) {
-                // Point light — Hydra Storm style: 1/(π*d²) attenuation
+                // Point/area light — Hydra Storm style: 1/(π*d²) attenuation
                 vec3 toLight = lights[i].posType.xyz - vWorldPos;
                 float dist2 = dot(toLight, toLight);
                 float dist = sqrt(dist2);
                 vec3 L = toLight / max(dist, 0.0001);
                 float NdotL = max(dot(N, L), 0.0);
-                // Small epsilon to avoid singularity at dist=0
                 float atten = 1.0 / (3.14159 * max(dist2, 0.0001));
-                // Directional area lights (rect/disk): hemisphere cutoff
-                // direction is non-zero only for directional lights
+
                 vec3 emitDir = lights[i].dirRadius.xyz;
                 float dirLen2 = dot(emitDir, emitDir);
+                int subtype = int(lights[i].color.a + 0.5);
+
                 if (dirLen2 > 0.001) {
-                    // Only illuminate surfaces in front of the light
-                    float hemi = dot(normalize(emitDir), -L);
-                    atten *= max(hemi, 0.0);
+                    vec3 eDir = normalize(emitDir);
+                    float hemi = dot(eDir, -L);
+                    if (hemi <= 0.0) { atten = 0.0; }
+                    else if (subtype == 1 || subtype == 2) {
+                        // Rect/Disk: project fragment onto light plane,
+                        // compute ratio to light size → projector-style cutoff
+                        vec3 right = normalize(cross(
+                            abs(eDir.y) < 0.99 ? vec3(0,1,0) : vec3(1,0,0), eDir));
+                        vec3 up2 = cross(eDir, right);
+                        vec3 offset = vWorldPos - lights[i].posType.xyz;
+                        float projDist = dot(offset, eDir);
+                        if (projDist <= 0.0) { atten = 0.0; }
+                        else {
+                            float projX = dot(offset, right);
+                            float projY = dot(offset, up2);
+                            // Light half-size as cone tangent: at distance d,
+                            // lit area = (2*d*hw) × (2*d*hh) → projector effect
+                            float hw = lights[i].shapeSize.x * 0.5;
+                            float hh = lights[i].shapeSize.y * 0.5;
+                            if (subtype == 1) {
+                                float fx = abs(projX) / (projDist * hw);
+                                float fy = abs(projY) / (projDist * hh);
+                                float rectFade = (1.0 - smoothstep(0.9, 1.0, fx))
+                                               * (1.0 - smoothstep(0.9, 1.0, fy));
+                                atten *= hemi * rectFade;
+                            } else {
+                                // Disk: same principle with radius
+                                float r = lights[i].shapeSize.x * 0.5;
+                                float fr = length(vec2(projX, projY)) / (projDist * r);
+                                float diskFade = 1.0 - smoothstep(0.9, 1.0, fr);
+                                atten *= hemi * diskFade;
+                            }
+                        }
+                    } else {
+                        atten *= max(hemi, 0.0); // sphere/cylinder: hemisphere
+                    }
                 }
                 diffuse += lcol * NdotL * atten;
             } else {
