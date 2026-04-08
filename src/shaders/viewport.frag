@@ -81,21 +81,22 @@ void main()
                         else {
                             float projX = dot(offset, right);
                             float projY = dot(offset, up2);
-                            // Fixed-size cutoff: light only within W×H area
+                            // Light size defines cone angle: lit area grows with distance
+                            // At d=0: area = W×H. At d=hw: area = 2W×2H. etc.
                             float hw = lights[i].shapeSize.x * 0.5;
                             float hh = lights[i].shapeSize.y * 0.5;
                             if (subtype == 1) {
-                                // Rect: fixed W×H regardless of distance
-                                float fx = abs(projX) / hw;
-                                float fy = abs(projY) / hh;
+                                float effHW = hw + projDist * hw;
+                                float effHH = hh + projDist * hh;
+                                float fx = abs(projX) / effHW;
+                                float fy = abs(projY) / effHH;
                                 float rectFade = (1.0 - smoothstep(0.9, 1.0, fx))
                                                * (1.0 - smoothstep(0.9, 1.0, fy));
                                 atten *= hemi * rectFade;
                             } else {
-                                // Disk: fixed circular cutoff at radius
-                                // shapeSize.x already stores radius (not diameter)
                                 float r = lights[i].shapeSize.x;
-                                float fr = length(vec2(projX, projY)) / r;
+                                float effR = r + projDist * r;
+                                float fr = length(vec2(projX, projY)) / effR;
                                 float diskFade = 1.0 - smoothstep(0.9, 1.0, fr);
                                 atten *= hemi * diskFade;
                             }
