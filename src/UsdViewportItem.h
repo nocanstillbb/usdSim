@@ -134,6 +134,7 @@ public:
     float unitScale() const { return m_unitScale; }
     float sceneRadius() const { return m_sceneRadius; }
     QVector3D sceneTarget() const { return m_target; }
+    bool isZUp() const { return m_zUp; }
 
 signals:
     void documentChanged();

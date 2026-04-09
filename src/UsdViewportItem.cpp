@@ -168,6 +168,7 @@ private:
     QMatrix4x4 m_lightVP;
     QVector3D m_sceneTarget;
     float m_sceneRadius = 10.f;
+    bool m_zUp = false;
 };
 
 // ================================================================
@@ -3444,6 +3445,7 @@ void UsdViewportRenderer::synchronize(QQuickRhiItem *item)
     m_sceneTarget = vp->sceneTarget();  // already in unit-scaled world space
     m_sceneRadius = vp->sceneRadius();  // already in unit-scaled world space
     if (m_sceneRadius < 0.1f) m_sceneRadius = 0.1f;
+    m_zUp = vp->isZUp();
     if (vp->meshDirty()) {
         m_pending = vp->meshes();
         m_sceneLights = vp->lights();
@@ -3950,24 +3952,47 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
                 break;
             }
         }
-        // Fall back to first point/area light (ortho, full scene coverage).
-        // Eye at light position so only objects in front cast shadows.
-        // Disk/Rect use emission direction; Sphere/Cylinder use light→scene.
+        // Fall back to first point/area light (ortho shadow map).
+        // Directional area lights (rect/disk): eye at light, forward only.
+        // Omnidirectional lights (sphere/cyl): eye behind scene, full coverage.
         if (!foundLight) {
             for (const auto &l : m_sceneLights) {
                 if (l.type == 1) {
+                    bool hasDir = l.direction.lengthSquared() > 0.001f;
                     QVector3D dir;
-                    if (l.direction.lengthSquared() > 0.001f)
-                        dir = l.direction.normalized();   // disk/rect emission dir
+                    if (hasDir)
+                        dir = l.direction.normalized();
                     else
-                        dir = (m_sceneTarget - l.position).normalized(); // sphere/cyl
+                        dir = (m_sceneTarget - l.position).normalized();
                     if (dir.lengthSquared() < 0.5f) dir = QVector3D(0, -1, 0);
                     QVector3D up = (qAbs(dir.y()) < 0.99f) ? QVector3D(0,1,0) : QVector3D(1,0,0);
-                    // Eye at light: near=0 clips behind the light
-                    lightView.lookAt(l.position, l.position + dir, up);
                     float r = m_sceneRadius * 1.5f;
-                    float farDist = (m_sceneTarget - l.position).length() + m_sceneRadius * 2.f;
-                    lightProj.ortho(-r, r, -r, r, 0.f, farDist);
+                    if (hasDir) {
+                        // Rect/Disk: eye at light, only forward shadows
+                        lightView.lookAt(l.position, l.position + dir, up);
+                        float farDist = (m_sceneTarget - l.position).length() + m_sceneRadius * 2.f;
+                        lightProj.ortho(-r, r, -r, r, 0.f, farDist);
+                    } else {
+                        // Sphere/Cylinder: perspective from light toward scene center.
+                        // Shadows radiate from the light (point light behavior).
+                        QVector3D toScene = m_sceneTarget - l.position;
+                        float dist = toScene.length();
+                        if (dist < m_sceneRadius * 0.01f) {
+                            // Light at scene center: fall back to downward
+                            dir = m_zUp ? QVector3D(0,0,-1) : QVector3D(0,-1,0);
+                            dist = m_sceneRadius;
+                        } else {
+                            dir = toScene.normalized();
+                        }
+                        up = (qAbs(dir.y()) < 0.99f) ? QVector3D(0,1,0) : QVector3D(1,0,0);
+                        lightView.lookAt(l.position, l.position + dir, up);
+                        // FOV covers the scene bounding sphere from this distance
+                        float halfAng = qAtan(m_sceneRadius * 1.5f / qMax(dist, 0.01f));
+                        float fov = qBound(30.f, qRadiansToDegrees(halfAng) * 2.f, 150.f);
+                        float nearP = qMax(0.01f, dist * 0.01f);
+                        float farP = dist + m_sceneRadius * 2.f;
+                        lightProj.perspective(fov, 1.0f, nearP, farP);
+                    }
                     foundLight = true;
                     break;
                 }
@@ -4020,7 +4045,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         constexpr float kShadowSize = 2048.f;
         lub.shadowParams[0] = 1.f / kShadowSize; // texelW
         lub.shadowParams[1] = 1.f / kShadowSize; // texelH
-        lub.shadowParams[2] = 0.002f;             // max bias (slope-scaled in shader)
+        lub.shadowParams[2] = 0.0005f; // fixed small bias, slope-scaling in shader handles the rest
         lub.shadowParams[3] = m_shadowPipeline ? 1.f : 0.f; // enabled
         upd->updateDynamicBuffer(m_lightUbuf, 0, sizeof(LightUBuf), &lub);
     }
@@ -4178,6 +4203,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         updAfterShadow = nullptr; // upd consumed by shadow pass
         cb->setGraphicsPipeline(m_shadowPipeline);
         cb->setViewport(QRhiViewport(0, 0, 2048, 2048));
+        int shadowDrawCount = 0;
         for (int i = 0; i < m_meshes.size(); ++i) {
             auto &m = m_meshes[i];
             if (m.lineOnly || m.isCollision || m.isLightGizmo) continue;
@@ -4186,8 +4212,20 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             QRhiCommandBuffer::VertexInput vi(m.vbuf, 0);
             cb->setVertexInput(0, 1, &vi, m.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
             cb->drawIndexed(m.indexCount);
+            ++shadowDrawCount;
         }
         cb->endPass();
+        static int logCount = 0;
+        if (logCount++ < 3)
+            qDebug() << "Shadow pass:" << shadowDrawCount << "meshes drawn,"
+                     << m_meshes.size() << "total,"
+                     << "sceneRadius=" << m_sceneRadius
+                     << "sceneTarget=" << m_sceneTarget;
+    } else {
+        static int logCount2 = 0;
+        if (logCount2++ < 3)
+            qDebug() << "Shadow pass SKIPPED: RT=" << m_shadowRT
+                     << "pipeline=" << m_shadowPipeline;
     }
 
     // --- Mask pass: render selected meshes to mask texture ---
