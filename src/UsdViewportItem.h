@@ -136,6 +136,9 @@ public:
     QVector3D sceneTarget() const { return m_target; }
     bool isZUp() const { return m_zUp; }
 
+    Q_INVOKABLE void saveCameraToStage();
+    Q_INVOKABLE bool restoreCameraFromStage();
+
 signals:
     void documentChanged();
     void selectedPrimPathsChanged();

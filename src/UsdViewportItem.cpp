@@ -39,6 +39,8 @@
 #include <pxr/base/gf/matrix4d.h>
 #include <pxr/base/gf/vec3f.h>
 #include <pxr/base/vt/array.h>
+#include <pxr/base/vt/dictionary.h>
+#include <pxr/usd/sdf/layer.h>
 
 PXR_NAMESPACE_USING_DIRECTIVE
 
@@ -73,8 +75,10 @@ private:
         bool isCollision = false;
         bool hasCollisionAPI = false;
         bool isFixedCollision = false;
-        QRhiBuffer *shadowUbuf = nullptr;            // shadow pass per-mesh UBO
+        QRhiBuffer *shadowUbuf = nullptr;            // shadow pass per-mesh UBO (2D + cube face 0)
         QRhiShaderResourceBindings *shadowSrb = nullptr;
+        QRhiBuffer *cubeShadowUbuf[5] = {};          // cube shadow faces 1-5 UBOs
+        QRhiShaderResourceBindings *cubeShadowSrb[5] = {};
         QRhiBuffer *colUbuf = nullptr;              // collision wireframe UBO
         QRhiShaderResourceBindings *colSrb = nullptr;
         QRhiBuffer *colVbuf = nullptr;              // sparse wireframe vertices
@@ -166,6 +170,26 @@ private:
     QRhiSampler *m_shadowSampler = nullptr;
     QShader m_shadowVs, m_shadowFs;
     QMatrix4x4 m_lightVP;
+    float m_shadowLightRadius = 0.f;
+    float m_shadowNearP = 0.01f;
+    float m_shadowFarP = 100.f;
+    float m_shadowIsPerspective = 0.f;
+
+    // Cube shadow map for sphere lights (omnidirectional)
+    static constexpr int kCubeFaceSize = 2048;
+    QRhiTexture *m_cubeShadowMap = nullptr;        // CubeMap R32F (linear depth)
+    QRhiTexture *m_cubeShadowDepth = nullptr;       // D32F shared depth for z-test
+    QRhiTexture *m_cubeFaceDummyColor[6] = {};      // dummy R8 per-face (unused)
+    QRhiTextureRenderTarget *m_cubeShadowRT[6] = {};
+    QRhiRenderPassDescriptor *m_cubeShadowRpDesc = nullptr;
+    QRhiGraphicsPipeline *m_cubeShadowPipeline = nullptr;
+    QRhiSampler *m_cubeShadowSampler = nullptr;
+    QShader m_cubeShadowVs, m_cubeShadowFs;
+    QMatrix4x4 m_cubeLightVP[6];
+    QVector3D m_cubeLightPos;
+    float m_cubeFarPlane = 100.f;
+    bool m_useCubeShadow = false;
+
     QVector3D m_sceneTarget;
     float m_sceneRadius = 10.f;
     bool m_zUp = false;
@@ -2159,12 +2183,71 @@ void UsdViewportItem::buildMeshes()
         // Fit camera: distance so scene fills ~60% of view (fov=45°)
         m_dist = m_sceneRadius / tanf(qDegreesToRadians(22.5f)) * 1.2f;
         m_cameraInitialized = true;
+
+        // Override with saved camera from USD custom layer data (if present)
+        restoreCameraFromStage();
     }
 
     // Always recalculate camera (m_zUp may have changed on file switch)
     updateCamera();
 
     m_meshDirty = true;
+}
+
+// ── Camera save/restore via USD custom layer data ─────────────────────
+
+void UsdViewportItem::saveCameraToStage()
+{
+    if (!m_doc || !m_doc->stagePtr()) return;
+    auto *stageRef = static_cast<pxr::UsdStageRefPtr *>(m_doc->stagePtr());
+    if (!*stageRef) return;
+
+    auto layer = (*stageRef)->GetRootLayer();
+    pxr::VtDictionary data = layer->GetCustomLayerData();
+    data["viewportCameraYaw"]     = pxr::VtValue(double(m_yaw));
+    data["viewportCameraPitch"]   = pxr::VtValue(double(m_pitch));
+    data["viewportCameraDist"]    = pxr::VtValue(double(m_dist));
+    data["viewportCameraTargetX"] = pxr::VtValue(double(m_target.x()));
+    data["viewportCameraTargetY"] = pxr::VtValue(double(m_target.y()));
+    data["viewportCameraTargetZ"] = pxr::VtValue(double(m_target.z()));
+    layer->SetCustomLayerData(data);
+    qDebug() << "Camera saved: yaw=" << m_yaw << "pitch=" << m_pitch
+             << "dist=" << m_dist << "target=" << m_target;
+}
+
+bool UsdViewportItem::restoreCameraFromStage()
+{
+    if (!m_doc || !m_doc->stagePtr()) return false;
+    auto *stageRef = static_cast<pxr::UsdStageRefPtr *>(m_doc->stagePtr());
+    if (!*stageRef) return false;
+
+    auto layer = (*stageRef)->GetRootLayer();
+    pxr::VtDictionary data = layer->GetCustomLayerData();
+
+    auto itYaw = data.find("viewportCameraYaw");
+    if (itYaw == data.end()) return false; // no saved camera
+
+    auto get = [&](const char *key, float fallback) -> float {
+        auto it = data.find(key);
+        if (it != data.end() && it->second.IsHolding<double>())
+            return float(it->second.UncheckedGet<double>());
+        return fallback;
+    };
+
+    m_yaw   = get("viewportCameraYaw",     m_yaw);
+    m_pitch = get("viewportCameraPitch",    m_pitch);
+    m_dist  = get("viewportCameraDist",     m_dist);
+    m_target = QVector3D(
+        get("viewportCameraTargetX", m_target.x()),
+        get("viewportCameraTargetY", m_target.y()),
+        get("viewportCameraTargetZ", m_target.z())
+    );
+    m_cameraInitialized = true;
+    updateCamera();
+    update();
+    qDebug() << "Camera restored: yaw=" << m_yaw << "pitch=" << m_pitch
+             << "dist=" << m_dist << "target=" << m_target;
+    return true;
 }
 
 void UsdViewportItem::updateCamera()
@@ -3201,6 +3284,16 @@ UsdViewportRenderer::~UsdViewportRenderer()
     delete m_shadowRT;
     delete m_shadowTex;
     delete m_shadowColorTex;
+    // Cube shadow map
+    delete m_cubeShadowPipeline;
+    delete m_cubeShadowSampler;
+    delete m_cubeShadowRpDesc;
+    for (int i = 0; i < 6; ++i) {
+        delete m_cubeShadowRT[i];
+        delete m_cubeFaceDummyColor[i];
+    }
+    delete m_cubeShadowMap;
+    delete m_cubeShadowDepth;
 }
 
 void UsdViewportRenderer::destroyMeshes()
@@ -3212,6 +3305,7 @@ void UsdViewportRenderer::destroyMeshes()
         delete m.ibufEdge;
         delete m.wireUbuf; delete m.wireSrb;
         delete m.shadowUbuf; delete m.shadowSrb;
+        for (int f = 0; f < 5; ++f) { delete m.cubeShadowUbuf[f]; delete m.cubeShadowSrb[f]; }
         delete m.colUbuf; delete m.colSrb;
         delete m.colVbuf; delete m.colIbuf;
     }
@@ -3249,7 +3343,11 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
         QRhiShaderResourceBinding::sampledTexture(
             2,
             QRhiShaderResourceBinding::FragmentStage,
-            m_shadowTex, m_shadowSampler)
+            m_shadowTex, m_shadowSampler),
+        QRhiShaderResourceBinding::sampledTexture(
+            3,
+            QRhiShaderResourceBinding::FragmentStage,
+            m_cubeShadowMap, m_cubeShadowSampler)
     });
     dst.srb->create();
 
@@ -3270,6 +3368,20 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
                 dst.shadowUbuf)
         });
         dst.shadowSrb->create();
+
+        // Cube shadow: 5 additional UBOs for faces 1-5 (face 0 reuses shadowUbuf)
+        for (int f = 0; f < 5; ++f) {
+            dst.cubeShadowUbuf[f] = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 160);
+            dst.cubeShadowUbuf[f]->create();
+            dst.cubeShadowSrb[f] = rhi->newShaderResourceBindings();
+            dst.cubeShadowSrb[f]->setBindings({
+                QRhiShaderResourceBinding::uniformBuffer(
+                    0,
+                    QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
+                    dst.cubeShadowUbuf[f])
+            });
+            dst.cubeShadowSrb[f]->create();
+        }
     }
 
     // Per-mesh wire UBO + SRB for outline rendering (not needed for lineOnly)
@@ -3285,7 +3397,15 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
             QRhiShaderResourceBinding::uniformBuffer(
                 1,
                 QRhiShaderResourceBinding::FragmentStage,
-                m_lightUbuf)
+                m_lightUbuf),
+            QRhiShaderResourceBinding::sampledTexture(
+                2,
+                QRhiShaderResourceBinding::FragmentStage,
+                m_shadowTex, m_shadowSampler),
+            QRhiShaderResourceBinding::sampledTexture(
+                3,
+                QRhiShaderResourceBinding::FragmentStage,
+                m_cubeShadowMap, m_cubeShadowSampler)
         });
         dst.wireSrb->create();
     }
@@ -3314,7 +3434,15 @@ void UsdViewportRenderer::uploadMesh(RhiMesh &dst, const MeshData &src,
             QRhiShaderResourceBinding::uniformBuffer(
                 1,
                 QRhiShaderResourceBinding::FragmentStage,
-                m_lightUbuf)
+                m_lightUbuf),
+            QRhiShaderResourceBinding::sampledTexture(
+                2,
+                QRhiShaderResourceBinding::FragmentStage,
+                m_shadowTex, m_shadowSampler),
+            QRhiShaderResourceBinding::sampledTexture(
+                3,
+                QRhiShaderResourceBinding::FragmentStage,
+                m_cubeShadowMap, m_cubeShadowSampler)
         });
         dst.colSrb->create();
 
@@ -3383,7 +3511,15 @@ void UsdViewportRenderer::uploadGizmoMesh(RhiGizmoMesh &dst, const GizmoMeshData
         QRhiShaderResourceBinding::uniformBuffer(
             1,
             QRhiShaderResourceBinding::FragmentStage,
-            m_lightUbuf)
+            m_lightUbuf),
+        QRhiShaderResourceBinding::sampledTexture(
+            2,
+            QRhiShaderResourceBinding::FragmentStage,
+            m_shadowTex, m_shadowSampler),
+        QRhiShaderResourceBinding::sampledTexture(
+            3,
+            QRhiShaderResourceBinding::FragmentStage,
+            m_cubeShadowMap, m_cubeShadowSampler)
     });
     dst.srb->create();
 
@@ -3405,10 +3541,12 @@ void UsdViewportRenderer::initialize(QRhiCommandBuffer *)
     m_outlineFs = loadShader(":/shaders/outline_post.frag.qsb");
     m_shadowVs = loadShader(":/shaders/shadow.vert.qsb");
     m_shadowFs = loadShader(":/shaders/shadow.frag.qsb");
+    m_cubeShadowVs = loadShader(":/shaders/shadow_cube.vert.qsb");
+    m_cubeShadowFs = loadShader(":/shaders/shadow_cube.frag.qsb");
 
-    // Scene light UBO (std140: 64*16 + 16 + 64(lightVP) + 16(shadowParams) = 1120)
+    // Scene light UBO (std140: 64*16 + 16 + 64(lightVP) + 16(shadowParams) + 16(shadowExtra) + 16(shadowLightPos) = 1152)
     QRhi *rhi = renderTarget()->rhi();
-    m_lightUbuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 1120);
+    m_lightUbuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 1152);
     m_lightUbuf->create();
 
     // Shadow map resources (2048x2048 depth texture + dummy color for FBO completeness)
@@ -3432,6 +3570,37 @@ void UsdViewportRenderer::initialize(QRhiCommandBuffer *)
     m_shadowRpDesc = m_shadowRT->newCompatibleRenderPassDescriptor();
     m_shadowRT->setRenderPassDescriptor(m_shadowRpDesc);
     m_shadowRT->create();
+
+    // Cube shadow map resources (R32F cubemap for sphere lights)
+    m_cubeShadowMap = rhi->newTexture(QRhiTexture::R32F,
+                                      QSize(kCubeFaceSize, kCubeFaceSize), 1,
+                                      QRhiTexture::RenderTarget | QRhiTexture::CubeMap);
+    m_cubeShadowMap->create();
+
+    m_cubeShadowDepth = rhi->newTexture(QRhiTexture::D32F,
+                                        QSize(kCubeFaceSize, kCubeFaceSize), 1,
+                                        QRhiTexture::RenderTarget);
+    m_cubeShadowDepth->create();
+
+    m_cubeShadowSampler = rhi->newSampler(
+        QRhiSampler::Nearest, QRhiSampler::Nearest, QRhiSampler::None,
+        QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
+    m_cubeShadowSampler->create();
+
+    // Create 6 render targets, one per cubemap face
+    for (int face = 0; face < 6; ++face) {
+        QRhiColorAttachment cubeAtt;
+        cubeAtt.setTexture(m_cubeShadowMap);
+        cubeAtt.setLayer(face);
+        QRhiTextureRenderTargetDescription cubeRtDesc(cubeAtt);
+        cubeRtDesc.setDepthTexture(m_cubeShadowDepth);
+        m_cubeShadowRT[face] = rhi->newTextureRenderTarget(cubeRtDesc);
+        if (face == 0) {
+            m_cubeShadowRpDesc = m_cubeShadowRT[0]->newCompatibleRenderPassDescriptor();
+        }
+        m_cubeShadowRT[face]->setRenderPassDescriptor(m_cubeShadowRpDesc);
+        m_cubeShadowRT[face]->create();
+    }
 }
 
 void UsdViewportRenderer::synchronize(QQuickRhiItem *item)
@@ -3522,6 +3691,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         delete m_collisionPipeline; m_collisionPipeline = nullptr;
         delete m_maskPipeline; m_maskPipeline = nullptr;
         delete m_shadowPipeline; m_shadowPipeline = nullptr;
+        delete m_cubeShadowPipeline; m_cubeShadowPipeline = nullptr;
         m_meshes.resize(m_pending.size());
         for (int i = 0; i < m_pending.size(); i++)
             uploadMesh(m_meshes[i], m_pending[i], upd);
@@ -3628,6 +3798,30 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
                 qWarning() << "Shadow pipeline creation FAILED";
                 delete m_shadowPipeline;
                 m_shadowPipeline = nullptr;
+            }
+        }
+
+        // Cube shadow pipeline (R32F color output for linear depth, used by sphere lights)
+        if (solidIdx >= 0 && m_cubeShadowRpDesc) {
+            m_cubeShadowPipeline = rhi->newGraphicsPipeline();
+            QRhiGraphicsPipeline::TargetBlend cubeShadowBlend;
+            cubeShadowBlend.enable = false; // no blending, just write
+            m_cubeShadowPipeline->setTargetBlends({cubeShadowBlend});
+            m_cubeShadowPipeline->setDepthTest(true);
+            m_cubeShadowPipeline->setDepthWrite(true);
+            m_cubeShadowPipeline->setCullMode(QRhiGraphicsPipeline::None); // no cull — single-sided geometry must cast shadows
+            m_cubeShadowPipeline->setShaderStages({
+                { QRhiShaderStage::Vertex,   m_cubeShadowVs },
+                { QRhiShaderStage::Fragment, m_cubeShadowFs }
+            });
+            m_cubeShadowPipeline->setVertexInputLayout(il);
+            m_cubeShadowPipeline->setShaderResourceBindings(m_meshes[solidIdx].shadowSrb);
+            m_cubeShadowPipeline->setRenderPassDescriptor(m_cubeShadowRpDesc);
+            m_cubeShadowPipeline->setSampleCount(1);
+            if (!m_cubeShadowPipeline->create()) {
+                qWarning() << "Cube shadow pipeline creation FAILED";
+                delete m_cubeShadowPipeline;
+                m_cubeShadowPipeline = nullptr;
             }
         }
 
@@ -3934,10 +4128,11 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
     };
 
     // Compute light view-projection for shadow mapping
-    // Supports directional lights (ortho) and point/area lights (perspective).
+    // Supports directional lights (ortho), rect/disk (ortho), sphere/cyl (cubemap).
     {
         QMatrix4x4 lightView, lightProj;
         bool foundLight = false;
+        m_useCubeShadow = false;
 
         // Prefer first directional light
         for (const auto &l : m_sceneLights) {
@@ -3948,13 +4143,17 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
                                  m_sceneTarget, up);
                 float r = m_sceneRadius * 1.5f;
                 lightProj.ortho(-r, r, -r, r, 0.01f, m_sceneRadius * 4.f);
+                m_shadowLightRadius = 0.f;
+                m_shadowNearP = 0.01f;
+                m_shadowFarP = m_sceneRadius * 4.f;
+                m_shadowIsPerspective = 0.f;
                 foundLight = true;
                 break;
             }
         }
-        // Fall back to first point/area light (ortho shadow map).
-        // Directional area lights (rect/disk): eye at light, forward only.
-        // Omnidirectional lights (sphere/cyl): eye behind scene, full coverage.
+        // Fall back to first point/area light.
+        // Directional area lights (rect/disk): ortho shadow map.
+        // Omnidirectional lights (sphere/cyl): cubemap shadow map (6 faces).
         if (!foundLight) {
             for (const auto &l : m_sceneLights) {
                 if (l.type == 1) {
@@ -3972,26 +4171,43 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
                         lightView.lookAt(l.position, l.position + dir, up);
                         float farDist = (m_sceneTarget - l.position).length() + m_sceneRadius * 2.f;
                         lightProj.ortho(-r, r, -r, r, 0.f, farDist);
+                        m_shadowLightRadius = 0.f;
+                        m_shadowNearP = 0.f;
+                        m_shadowFarP = farDist;
+                        m_shadowIsPerspective = 0.f;
                     } else {
-                        // Sphere/Cylinder: perspective from light toward scene center.
-                        // Shadows radiate from the light (point light behavior).
-                        QVector3D toScene = m_sceneTarget - l.position;
-                        float dist = toScene.length();
-                        if (dist < m_sceneRadius * 0.01f) {
-                            // Light at scene center: fall back to downward
-                            dir = m_zUp ? QVector3D(0,0,-1) : QVector3D(0,-1,0);
-                            dist = m_sceneRadius;
-                        } else {
-                            dir = toScene.normalized();
+                        // Sphere/Cylinder: cubemap shadow (6 faces, 90° FOV each)
+                        m_useCubeShadow = true;
+                        m_cubeLightPos = l.position;
+                        float dist = (m_sceneTarget - l.position).length();
+                        float nearP = qMax(0.0001f, l.radius * 0.001f);
+                        float farP  = qMax(dist + m_sceneRadius * 2.f, m_sceneRadius * 4.f);
+                        m_cubeFarPlane = farP;
+                        m_shadowLightRadius = l.radius;
+                        m_shadowNearP = nearP;
+                        m_shadowFarP = farP;
+                        m_shadowIsPerspective = 2.f; // 2 = cube shadow mode
+
+                        // 6 cubemap face view matrices (OpenGL convention)
+                        static const QVector3D targets[6] = {
+                            { 1, 0, 0}, {-1, 0, 0},
+                            { 0, 1, 0}, { 0,-1, 0},
+                            { 0, 0, 1}, { 0, 0,-1}
+                        };
+                        static const QVector3D ups[6] = {
+                            { 0,-1, 0}, { 0,-1, 0},
+                            { 0, 0, 1}, { 0, 0,-1},
+                            { 0,-1, 0}, { 0,-1, 0}
+                        };
+                        QMatrix4x4 cubeProj;
+                        cubeProj.perspective(90.0f, 1.0f, nearP, farP);
+                        for (int face = 0; face < 6; ++face) {
+                            QMatrix4x4 faceView;
+                            faceView.lookAt(l.position,
+                                            l.position + targets[face],
+                                            ups[face]);
+                            m_cubeLightVP[face] = rhi->clipSpaceCorrMatrix() * cubeProj * faceView;
                         }
-                        up = (qAbs(dir.y()) < 0.99f) ? QVector3D(0,1,0) : QVector3D(1,0,0);
-                        lightView.lookAt(l.position, l.position + dir, up);
-                        // FOV covers the scene bounding sphere from this distance
-                        float halfAng = qAtan(m_sceneRadius * 1.5f / qMax(dist, 0.01f));
-                        float fov = qBound(30.f, qRadiansToDegrees(halfAng) * 2.f, 150.f);
-                        float nearP = qMax(0.01f, dist * 0.01f);
-                        float farP = dist + m_sceneRadius * 2.f;
-                        lightProj.perspective(fov, 1.0f, nearP, farP);
                     }
                     foundLight = true;
                     break;
@@ -4006,6 +4222,10 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
                              m_sceneTarget, up);
             float r = m_sceneRadius * 1.5f;
             lightProj.ortho(-r, r, -r, r, 0.01f, m_sceneRadius * 4.f);
+            m_shadowLightRadius = 0.f;
+            m_shadowNearP = 0.01f;
+            m_shadowFarP = m_sceneRadius * 4.f;
+            m_shadowIsPerspective = 0.f;
         }
         m_lightVP = rhi->clipSpaceCorrMatrix() * lightProj * lightView;
     }
@@ -4020,6 +4240,8 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             int numLights[4];       // offset 1024
             float lightVP[16];      // offset 1040
             float shadowParams[4];  // offset 1104
+            float shadowExtra[4];   // offset 1120: x=lightRadius, y=nearP, z=farP, w=shadowMode(0=ortho,1=persp,2=cube)
+            float shadowLightPos[4]; // offset 1136: xyz=light position (for cube shadow)
         };
         LightUBuf lub{};
         int count = qMin(m_sceneLights.size(), 16);
@@ -4046,7 +4268,15 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         lub.shadowParams[0] = 1.f / kShadowSize; // texelW
         lub.shadowParams[1] = 1.f / kShadowSize; // texelH
         lub.shadowParams[2] = 0.0005f; // fixed small bias, slope-scaling in shader handles the rest
-        lub.shadowParams[3] = m_shadowPipeline ? 1.f : 0.f; // enabled
+        lub.shadowParams[3] = (m_shadowPipeline || m_cubeShadowPipeline) ? 1.f : 0.f; // enabled
+        lub.shadowExtra[0] = m_shadowLightRadius;
+        lub.shadowExtra[1] = m_shadowNearP;
+        lub.shadowExtra[2] = m_shadowFarP;
+        lub.shadowExtra[3] = m_shadowIsPerspective; // 0=ortho, 1=persp, 2=cube
+        lub.shadowLightPos[0] = m_cubeLightPos.x();
+        lub.shadowLightPos[1] = m_cubeLightPos.y();
+        lub.shadowLightPos[2] = m_cubeLightPos.z();
+        lub.shadowLightPos[3] = m_cubeFarPlane;
         upd->updateDynamicBuffer(m_lightUbuf, 0, sizeof(LightUBuf), &lub);
     }
 
@@ -4064,8 +4294,8 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         ub.lightDir[2] = m_cameraEye.z(); ub.lightDir[3] = 0.f;
         upd->updateDynamicBuffer(m.ubuf, 0, sizeof(UBuf), &ub);
 
-        // Shadow pass UBO: lightVP * model as mvp
-        if (m.shadowUbuf) {
+        // Shadow pass UBO: lightVP * model as mvp (skip for cube shadow — updated per-face)
+        if (m.shadowUbuf && !m_useCubeShadow) {
             UBuf sub{};
             QMatrix4x4 shadowMVP = m_lightVP * m.transform;
             memcpy(sub.mvp, shadowMVP.constData(), 64);
@@ -4198,7 +4428,65 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
 
     // --- Shadow pass: render scene depth from light's perspective ---
     QRhiResourceUpdateBatch *updAfterShadow = upd;
-    if (m_shadowRT && m_shadowPipeline) {
+    if (m_useCubeShadow && m_cubeShadowPipeline && m_cubeShadowRT[0]) {
+        // --- Cube shadow: 6-face rendering for sphere lights ---
+        // Pre-upload ALL 6 face UBOs into the main batch (each buffer written once)
+        for (int i = 0; i < m_meshes.size(); ++i) {
+            auto &m = m_meshes[i];
+            if (!m.shadowUbuf || m.lineOnly || m.isCollision || m.isLightGizmo) continue;
+            for (int face = 0; face < 6; ++face) {
+                UBuf sub{};
+                QMatrix4x4 shadowMVP = m_cubeLightVP[face] * m.transform;
+                memcpy(sub.mvp, shadowMVP.constData(), 64);
+                memcpy(sub.model, m.transform.constData(), 64);
+                sub.lightDir[0] = m_cubeLightPos.x();
+                sub.lightDir[1] = m_cubeLightPos.y();
+                sub.lightDir[2] = m_cubeLightPos.z();
+                sub.lightDir[3] = m_cubeFarPlane;
+                QRhiBuffer *buf = (face == 0) ? m.shadowUbuf : m.cubeShadowUbuf[face - 1];
+                upd->updateDynamicBuffer(buf, 0, sizeof(UBuf), &sub);
+            }
+        }
+        // Render each face using its dedicated UBO
+        for (int face = 0; face < 6; ++face) {
+            QRhiResourceUpdateBatch *faceUpd = nullptr;
+            if (face == 0) {
+                faceUpd = upd;
+                updAfterShadow = nullptr;
+            }
+            cb->beginPass(m_cubeShadowRT[face],
+                          QColor::fromRgbF(1.0, 1.0, 1.0, 1.0),
+                          {1.f, 0}, faceUpd);
+            cb->setGraphicsPipeline(m_cubeShadowPipeline);
+            cb->setViewport(QRhiViewport(0, 0, kCubeFaceSize, kCubeFaceSize));
+            for (int i = 0; i < m_meshes.size(); ++i) {
+                auto &m = m_meshes[i];
+                if (m.lineOnly || m.isCollision || m.isLightGizmo) continue;
+                if (!m.shadowSrb) continue;
+                QRhiShaderResourceBindings *srb = (face == 0)
+                    ? m.shadowSrb : m.cubeShadowSrb[face - 1];
+                cb->setShaderResources(srb);
+                QRhiCommandBuffer::VertexInput vi(m.vbuf, 0);
+                cb->setVertexInput(0, 1, &vi, m.ibuf, 0, QRhiCommandBuffer::IndexUInt32);
+                cb->drawIndexed(m.indexCount);
+            }
+            cb->endPass();
+        }
+        static int cubeLog2 = 0;
+        if (cubeLog2++ < 5) {
+            qDebug() << "CubeShadow: lightPos=" << m_cubeLightPos
+                     << "farPlane=" << m_cubeFarPlane
+                     << "nearP=" << m_shadowNearP
+                     << "sceneRadius=" << m_sceneRadius
+                     << "faceSize=" << kCubeFaceSize;
+            // Print VP[0][0..3] for each face to verify different matrices
+            for (int f = 0; f < 6; ++f)
+                qDebug() << "  face" << f << ": VP row0="
+                         << m_cubeLightVP[f](0,0) << m_cubeLightVP[f](0,1)
+                         << m_cubeLightVP[f](0,2) << m_cubeLightVP[f](0,3);
+        }
+    } else if (m_shadowRT && m_shadowPipeline) {
+        // --- 2D shadow: single pass for directional/rect/disk lights ---
         cb->beginPass(m_shadowRT, QColor(), {1.f, 0}, upd);
         updAfterShadow = nullptr; // upd consumed by shadow pass
         cb->setGraphicsPipeline(m_shadowPipeline);

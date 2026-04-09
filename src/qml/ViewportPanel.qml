@@ -9,6 +9,7 @@ Rectangle {
 
     required property var document
     property var selectedPrimPaths: []
+    property alias viewportItem: viewport
     signal selectionChanged(var paths)
     signal attributeRefreshNeeded()
 

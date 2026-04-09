@@ -25,8 +25,178 @@ layout(std140, binding = 1) uniform SceneLights {
     ivec4 numLights; // x=count
     mat4 lightVP;        // light view-projection for shadow mapping
     vec4 shadowParams;   // x=texelW, y=texelH, z=bias, w=enabled
+    vec4 shadowExtra;    // x=lightRadius, y=nearP, z=farP, w=shadowMode(0=ortho,1=persp,2=cube)
+    vec4 shadowLightPos; // xyz=light position (cube shadow), w=farPlane
 };
 layout(binding = 2) uniform sampler2D shadowMap;
+layout(binding = 3) uniform samplerCube cubeShadowMap;
+
+// --- PCSS helpers ---
+
+// Interleaved gradient noise for per-pixel random rotation (Jorge Jimenez)
+float interleavedGradientNoise(vec2 screenPos) {
+    return fract(52.9829189 * fract(0.06711056 * screenPos.x + 0.00583715 * screenPos.y));
+}
+
+// Vogel disk sample: generates N evenly distributed points on a unit disk
+vec2 vogelDiskSample(int sampleIdx, int numSamples, float rotation) {
+    float goldenAngle = 2.399963;  // pi * (3 - sqrt(5))
+    float r = sqrt(float(sampleIdx) + 0.5) / sqrt(float(numSamples));
+    float theta = float(sampleIdx) * goldenAngle + rotation;
+    return vec2(cos(theta), sin(theta)) * r;
+}
+
+#define PCSS_BLOCKER_SAMPLES 16
+#define PCSS_PCF_SAMPLES 32
+
+// Step 1: Blocker search — find average depth of occluders in a search region
+float findBlockerDepth(vec2 uv, float receiverDepth, float searchRadius, float bias) {
+    float blockerSum = 0.0;
+    int blockerCount = 0;
+    float rotation = interleavedGradientNoise(gl_FragCoord.xy) * 6.2831853;
+
+    for (int i = 0; i < PCSS_BLOCKER_SAMPLES; ++i) {
+        vec2 offset = vogelDiskSample(i, PCSS_BLOCKER_SAMPLES, rotation) * searchRadius;
+        float sampleDepth = texture(shadowMap, uv + offset).r;
+        if (receiverDepth - bias > sampleDepth) {
+            blockerSum += sampleDepth;
+            blockerCount++;
+        }
+    }
+    return blockerCount > 0 ? blockerSum / float(blockerCount) : -1.0;
+}
+
+// Step 3: Variable-width PCF
+float pcfFilter(vec2 uv, float receiverDepth, float filterRadius, float bias) {
+    float shadow = 0.0;
+    float rotation = interleavedGradientNoise(gl_FragCoord.xy) * 6.2831853;
+
+    for (int i = 0; i < PCSS_PCF_SAMPLES; ++i) {
+        vec2 offset = vogelDiskSample(i, PCSS_PCF_SAMPLES, rotation) * filterRadius;
+        float sampleDepth = texture(shadowMap, uv + offset).r;
+        shadow += (receiverDepth - bias > sampleDepth) ? 1.0 : 0.0;
+    }
+    return shadow / float(PCSS_PCF_SAMPLES);
+}
+
+// --- Cube shadow PCSS (omnidirectional sphere lights) ---
+
+float cubeShadowPCSS(vec3 worldPos) {
+    vec3 lightPos = shadowLightPos.xyz;
+    float farPlane = shadowLightPos.w;
+    float lightRadius = shadowExtra.x;
+
+    // Bias offset: combine normal offset + light-direction offset to prevent
+    // light leaking at corners where occluder meets receiver
+    vec3 N = normalize(vNormal);
+    vec3 toLightDir = normalize(worldPos - lightPos);
+    float NdotL = abs(dot(N, toLightDir));
+    float distToLight = length(worldPos - lightPos);
+    float texelWorldSize = distToLight / 2048.0; // ~1 cubemap texel at this distance
+
+    // Minimal normal offset: just enough to prevent self-shadow.
+    // Shadow_cube.frag uses slope-based bias, so we only need a tiny push here.
+    float normalAmount = texelWorldSize * mix(2.0, 0.3, NdotL);
+    vec3 biasedPos = worldPos + N * normalAmount;
+
+    vec3 fragToLight = biasedPos - lightPos;
+    float currentDist = length(fragToLight);
+    float currentDepth = currentDist / farPlane;
+    vec3 dir = normalize(fragToLight);
+
+    // Depth bias proportional to distance
+    float bias = mix(0.001, 0.0001, NdotL) * currentDepth;
+
+    // Build tangent frame around direction for disk sampling
+    vec3 up = abs(dir.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 right = normalize(cross(up, dir));
+    up = cross(dir, right);
+
+    // Light angular size controls penumbra
+    float lightSizeAngular = lightRadius / max(currentDist, 0.001);
+
+    if (lightSizeAngular < 0.0001) {
+        // Tiny light: simple hard shadow
+        float closestDepth = texture(cubeShadowMap, fragToLight).r;
+        return (currentDepth - bias > closestDepth) ? 1.0 : 0.0;
+    }
+
+    float rotation = interleavedGradientNoise(gl_FragCoord.xy) * 6.2831853;
+
+    // Step 1: Blocker search
+    float searchRadius = lightSizeAngular * 0.5;
+    float blockerSum = 0.0;
+    int blockerCount = 0;
+    for (int i = 0; i < PCSS_BLOCKER_SAMPLES; ++i) {
+        vec2 diskOff = vogelDiskSample(i, PCSS_BLOCKER_SAMPLES, rotation) * searchRadius;
+        vec3 sampleDir = normalize(dir + right * diskOff.x + up * diskOff.y);
+        float sampleDepth = texture(cubeShadowMap, sampleDir).r;
+        if (currentDepth - bias > sampleDepth) {
+            blockerSum += sampleDepth;
+            blockerCount++;
+        }
+    }
+
+    if (blockerCount == 0)
+        return 0.0;
+
+    float avgBlockerDepth = blockerSum / float(blockerCount);
+
+    // Step 2: Penumbra estimation
+    float penumbraWidth = (currentDepth - avgBlockerDepth) / max(avgBlockerDepth, 0.0001) * lightSizeAngular;
+    penumbraWidth = clamp(penumbraWidth, 0.002, lightSizeAngular * 4.0);
+
+    // Step 3: Variable-width PCF
+    float shadow = 0.0;
+    for (int i = 0; i < PCSS_PCF_SAMPLES; ++i) {
+        vec2 diskOff = vogelDiskSample(i, PCSS_PCF_SAMPLES, rotation) * penumbraWidth;
+        vec3 sampleDir = normalize(dir + right * diskOff.x + up * diskOff.y);
+        float sampleDepth = texture(cubeShadowMap, sampleDir).r;
+        shadow += (currentDepth - bias > sampleDepth) ? 1.0 : 0.0;
+    }
+    return shadow / float(PCSS_PCF_SAMPLES);
+}
+
+// --- 2D shadow PCSS (directional/rect/disk lights) ---
+
+float pcssShadow(vec2 uv, float receiverDepth, float bias) {
+    float lightRadius = shadowExtra.x;
+    float nearP = shadowExtra.y;
+    float farP = shadowExtra.z;
+
+    // Light size in shadow-map UV space — normalize by frustum half-width
+    // For perspective: frustum half-width at distance d ≈ d * nearP_ratio
+    // Use a practical normalization: lightRadius relative to scene coverage
+    float lightSizeUV = lightRadius * shadowParams.x * 8.0;  // scale by texel size for practical range
+
+    // Clamp to reasonable range — if lightRadius is 0, fall back to basic PCF
+    if (lightSizeUV < 0.0001) {
+        // Basic 3x3 PCF fallback for non-sphere lights
+        vec2 texelSize = shadowParams.xy;
+        float shadow = 0.0;
+        for (int x = -1; x <= 1; ++x) {
+            for (int y = -1; y <= 1; ++y) {
+                float d = texture(shadowMap, uv + vec2(x, y) * texelSize).r;
+                shadow += (receiverDepth - bias > d) ? 1.0 : 0.0;
+            }
+        }
+        return shadow / 9.0;
+    }
+
+    // Step 1: Blocker search with radius proportional to light size
+    float searchRadius = lightSizeUV;
+    float avgBlockerDepth = findBlockerDepth(uv, receiverDepth, searchRadius, bias);
+
+    if (avgBlockerDepth < 0.0)
+        return 0.0;  // No blockers found — fully lit
+
+    // Step 2: Penumbra estimation
+    float penumbraWidth = (receiverDepth - avgBlockerDepth) / avgBlockerDepth * lightSizeUV;
+    penumbraWidth = clamp(penumbraWidth, shadowParams.x, lightSizeUV * 4.0);
+
+    // Step 3: Variable-width PCF
+    return pcfFilter(uv, receiverDepth, penumbraWidth, bias);
+}
 
 void main()
 {
@@ -113,32 +283,28 @@ void main()
             }
         }
 
-        // Shadow mapping (PCF 3x3) with slope-scaled bias
+        // Shadow mapping
         float shadow = 0.0;
         if (shadowParams.w > 0.5) {
-            vec4 lsPos = lightVP * vec4(vWorldPos, 1.0);
-            vec3 proj = lsPos.xyz / lsPos.w;
-            proj = proj * 0.5 + 0.5;
-            if (proj.z > 0.0 && proj.z <= 1.0 &&
-                proj.x >= 0.0 && proj.x <= 1.0 &&
-                proj.y >= 0.0 && proj.y <= 1.0)
-            {
-                // Slope-scaled bias: large for grazing angles, tiny for perpendicular
-                float maxBias = shadowParams.z;
-                float minBias = maxBias * 0.1;
-                // Approximate light direction from light-space Z axis
-                vec3 lightFwd = normalize(vec3(lightVP[0][2], lightVP[1][2], lightVP[2][2]));
-                float cosTheta = abs(dot(N, lightFwd));
-                float bias = mix(maxBias, minBias, cosTheta);
-
-                vec2 texelSize = shadowParams.xy;
-                for (int x = -1; x <= 1; ++x) {
-                    for (int y = -1; y <= 1; ++y) {
-                        float d = texture(shadowMap, proj.xy + vec2(x, y) * texelSize).r;
-                        shadow += (proj.z - bias > d) ? 1.0 : 0.0;
-                    }
+            if (shadowExtra.w > 1.5) {
+                // Cube shadow mode (sphere lights — omnidirectional)
+                shadow = cubeShadowPCSS(vWorldPos);
+            } else {
+                // 2D shadow mode (directional/rect/disk lights — PCSS)
+                vec4 lsPos = lightVP * vec4(vWorldPos, 1.0);
+                vec3 proj = lsPos.xyz / lsPos.w;
+                proj = proj * 0.5 + 0.5;
+                if (proj.z > 0.0 && proj.z <= 1.0 &&
+                    proj.x >= 0.0 && proj.x <= 1.0 &&
+                    proj.y >= 0.0 && proj.y <= 1.0)
+                {
+                    float maxBias = shadowParams.z;
+                    float minBias = maxBias * 0.1;
+                    vec3 lightFwd = normalize(vec3(lightVP[0][2], lightVP[1][2], lightVP[2][2]));
+                    float cosTheta = abs(dot(N, lightFwd));
+                    float bias = mix(maxBias, minBias, cosTheta);
+                    shadow = pcssShadow(proj.xy, proj.z, bias);
                 }
-                shadow /= 9.0;
             }
         }
         diffuse *= (1.0 - shadow);
@@ -146,6 +312,15 @@ void main()
         vec3 lit = vColor * (ambient + diffuse);
         // Reinhard tonemapping: prevents blowout while preserving color
         fragColor = vec4(lit / (lit + vec3(1.0)), 1.0);
+
+        // DEBUG: uncomment to visualize cubemap shadow depth
+        // if (shadowExtra.w > 1.5) {
+        //     vec3 d = vWorldPos - shadowLightPos.xyz;
+        //     float cd = length(d) / shadowLightPos.w;
+        //     float sd = texture(cubeShadowMap, d).r;
+        //     float sh = (cd - 0.001*cd > sd && sd > 0.00001) ? 1.0 : 0.0;
+        //     fragColor = vec4(sd*10.0, cd*10.0, sh, 1.0);
+        // }
     } else {
         // Flat color (outline / wireframe)
         fragColor = vec4(vColor, 1.0);

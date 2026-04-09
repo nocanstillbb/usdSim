@@ -92,7 +92,7 @@ src/
   AttrInfo.h
   bindings.cpp        ← pybind11 module (pyusdSim): exposes UsdSimApp + UsdDocument to Python
   qml/                ← QML UI files
-  shaders/            ← GLSL vertex/fragment shaders
+  shaders/            ← GLSL vertex/fragment shaders (viewport, shadow, shadow_cube, outline_post)
   icons/              ← SVG icon resources
 
 python/examples/     ← Python example scripts
@@ -177,6 +177,35 @@ Usage:
   - `playqmlright/playqmlright/` – Python MCP server (FastMCP)
   - `qmlapp/` – Example QML app
 - `third_party/prism_all/` – Git submodule containing prism framework (container, qt_core, qt_modular, qt_ui)
+
+## Shadow Mapping
+
+The viewport supports shadow mapping for all light types:
+
+### Directional / Rect / Disk lights
+- Single 2048×2048 2D depth shadow map
+- Orthographic projection from light
+- PCSS (Percentage Closer Soft Shadows) with blocker search + variable-width PCF
+
+### Sphere / Cylinder lights (omnidirectional)
+- **Cubemap shadow map**: 6-face R32F cubemap, 2048×2048 per face
+- Each face uses a separate UBO per mesh (6 UBOs) to avoid QRhi dynamic buffer reuse issues
+- Cube shadow shaders: `shadow_cube.vert` / `shadow_cube.frag`
+- `shadow_cube.vert`: expands geometry along normals by ~2 cubemap texels to prevent junction light leaks
+- `shadow_cube.frag`: stores exact linear distance `length(worldPos - lightPos) / farPlane`
+- Sampling in `viewport.frag`: direction-based cubemap lookup with normal offset bias and PCSS
+
+### Shadow bias strategy
+- **Geometry expansion** (shadow_cube.vert): vertices pushed along normals in clip space only (not world pos), covering more cubemap texels at surface edges
+- **Normal offset** (viewport.frag): sampling point pushed along surface normal to prevent self-shadowing
+- **Depth bias** (viewport.frag): proportional to distance, slope-scaled by NdotL
+
+## Camera Save/Restore
+
+Camera state (yaw, pitch, distance, target) is automatically saved to/restored from USD `customLayerData`:
+- **Save**: triggered by "保存" / "另存为" menu actions via `saveCameraToStage()`
+- **Restore**: automatic on file open in `buildMeshes()` via `restoreCameraFromStage()`
+- Stored as `viewportCameraYaw/Pitch/Dist/TargetX/Y/Z` in root layer custom data
 
 ## Usage Pattern
 

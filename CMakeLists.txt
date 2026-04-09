@@ -95,6 +95,16 @@ qt_add_shaders(usdSimLib "shadow_shaders"
         shaders/shadow.frag.qsb
 )
 
+qt_add_shaders(usdSimLib "shadow_cube_shaders"
+    PREFIX "/"
+    FILES
+        src/shaders/shadow_cube.vert
+        src/shaders/shadow_cube.frag
+    OUTPUTS
+        shaders/shadow_cube.vert.qsb
+        shaders/shadow_cube.frag.qsb
+)
+
 set_target_properties(usdSimLib PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
     INSTALL_RPATH "${USD_INSTALL_DIR}/lib"

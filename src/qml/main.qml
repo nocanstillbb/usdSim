@@ -106,7 +106,7 @@ ApplicationWindow {
             Repeater {
                 model: [
                     { label: "打开",   enabled: true,        action: function(){ root.openFileAction() } },
-                    { label: "保存",   enabled: doc.isOpen,  action: function(){ doc.save(); statusText.text = "已保存" } },
+                    { label: "保存",   enabled: doc.isOpen,  action: function(){ viewportPanel.viewportItem.saveCameraToStage(); doc.save(); statusText.text = "已保存" } },
                     { label: "另存为", enabled: doc.isOpen,  action: function(){ root.saveAsAction() } },
                     { label: "关闭",   enabled: doc.isOpen,  action: function(){
                         doc.close(); doc.clearAttributes()
@@ -289,6 +289,7 @@ ApplicationWindow {
         }
     }
     function saveAsAction() {
+        viewportPanel.viewportItem.saveCameraToStage()
         let path = doc.showSaveFileDialog()
         if (path !== "") {
             let ok = doc.saveAs(path)
