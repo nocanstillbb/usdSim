@@ -4471,7 +4471,11 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         ou.params[0] = 1.f / float(sz.width());   // texelSize.x
         ou.params[1] = 1.f / float(sz.height());  // texelSize.y
         ou.params[2] = 3.f;                        // radius in pixels
-        ou.params[3] = 0.f; // no UV flip — fullscreen tri and render target share the same Y convention
+        // Vulkan uses negative viewport height to flip Y — mask and scene stay aligned, no UV flip.
+        // Metal/D3D use clipSpaceCorrMatrix Y-flip — mask texture is Y-flipped vs scene, need UV flip.
+        // isYUpInFramebuffer() returns false for both Vulkan and Metal, so check backend directly.
+        bool noFlip = (rhi->isYUpInFramebuffer() || rhi->backend() == QRhi::Vulkan);
+        ou.params[3] = noFlip ? 0.f : 1.f;
         upd->updateDynamicBuffer(m_outlineUbuf, 0, sizeof(OutUBuf), &ou);
     }
 
