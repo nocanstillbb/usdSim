@@ -4167,14 +4167,24 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
                     QVector3D up = (qAbs(dir.y()) < 0.99f) ? QVector3D(0,1,0) : QVector3D(1,0,0);
                     float r = m_sceneRadius * 1.5f;
                     if (hasDir) {
-                        // Rect/Disk: eye at light, only forward shadows
-                        lightView.lookAt(l.position, l.position + dir, up);
-                        float farDist = (m_sceneTarget - l.position).length() + m_sceneRadius * 2.f;
-                        lightProj.ortho(-r, r, -r, r, 0.f, farDist);
+                        // Rect/Disk: perspective shadow matching the cone expansion.
+                        // The lighting cone uses effHW = hw * (1 + d), which is equivalent
+                        // to a perspective from a virtual focal point 1 unit behind the light.
+                        float hw = l.width * 0.5f;
+                        float hh = l.height * 0.5f;
+                        float maxHalf = qMax(hw, hh);
+                        if (maxHalf < 0.001f) maxHalf = 0.001f;
+                        float fov = qRadiansToDegrees(qAtan(maxHalf)) * 2.f;
+                        fov = qBound(5.f, fov, 170.f);
+                        // Eye 1 unit behind the light (matches the cone's focal point)
+                        QVector3D eye = l.position - dir * 1.f;
+                        lightView.lookAt(eye, eye + dir, up);
+                        float farDist = (m_sceneTarget - l.position).length() + m_sceneRadius * 2.f + 1.f;
+                        lightProj.perspective(fov, 1.0f, 0.1f, farDist);
                         m_shadowLightRadius = 0.f;
-                        m_shadowNearP = 0.f;
+                        m_shadowNearP = 0.1f;
                         m_shadowFarP = farDist;
-                        m_shadowIsPerspective = 0.f;
+                        m_shadowIsPerspective = 1.f;
                     } else {
                         // Sphere/Cylinder: cubemap shadow (6 faces, 90° FOV each)
                         m_useCubeShadow = true;
