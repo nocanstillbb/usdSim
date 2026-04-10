@@ -14,16 +14,17 @@ layout(std140, binding = 0) uniform PerObject {
 
 void main()
 {
-    // Original world position — used for depth calculation (no expansion)
+    // Store original world position for accurate depth
     vWorldPos = (ubo.modelMat * vec4(inPos, 1.0)).xyz;
 
     // Expand clip position along normals by ~2 cubemap texels.
-    // This makes surface edges cover adjacent texels (prevents junction leak),
-    // but depth is stored from the ORIGINAL position (prevents self-shadow).
-    vec3 worldNormal = normalize(mat3(ubo.modelMat) * inNormal);
+    // This makes surface edges cover adjacent texels, preventing
+    // light leaks at junctions (shelf meets wall) and self-shadow artifacts
+    // (since viewport.frag uses no normal offset for direction accuracy).
+    // Only gl_Position is expanded — vWorldPos stays original, so stored depth is exact.
     float distToLight = length(vWorldPos - ubo.lightDir.xyz);
-    float texelSize = distToLight / 1024.0; // ~2 texels at this distance
+    float texelSize = distToLight / 2048.0;
     float localScale = length(ubo.modelMat[0].xyz);
-    vec3 expandedPos = inPos + normalize(inNormal) * (texelSize / max(localScale, 0.0001));
+    vec3 expandedPos = inPos + normalize(inNormal) * (texelSize * 2.0 / max(localScale, 0.0001));
     gl_Position = ubo.mvp * vec4(expandedPos, 1.0);
 }

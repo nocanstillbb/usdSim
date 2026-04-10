@@ -86,26 +86,20 @@ float cubeShadowPCSS(vec3 worldPos) {
     float farPlane = shadowLightPos.w;
     float lightRadius = shadowExtra.x;
 
-    // Bias offset: combine normal offset + light-direction offset to prevent
-    // light leaking at corners where occluder meets receiver
     vec3 N = normalize(vNormal);
-    vec3 toLightDir = normalize(worldPos - lightPos);
-    float NdotL = abs(dot(N, toLightDir));
-    float distToLight = length(worldPos - lightPos);
-    float texelWorldSize = distToLight / 2048.0; // ~1 cubemap texel at this distance
 
-    // Minimal normal offset: just enough to prevent self-shadow.
-    // Shadow_cube.frag uses slope-based bias, so we only need a tiny push here.
-    float normalAmount = texelWorldSize * mix(2.0, 0.3, NdotL);
-    vec3 biasedPos = worldPos + N * normalAmount;
-
-    vec3 fragToLight = biasedPos - lightPos;
+    // Use ORIGINAL worldPos for sampling direction — normal offset can push
+    // the direction past thin occluders (partitions, shelves), causing leaks.
+    vec3 fragToLight = worldPos - lightPos;
     float currentDist = length(fragToLight);
     float currentDepth = currentDist / farPlane;
     vec3 dir = normalize(fragToLight);
 
-    // Depth bias proportional to distance
-    float bias = mix(0.001, 0.0001, NdotL) * currentDepth;
+    // Slope-scaled depth bias (compensates for geometry expansion in shadow_cube.vert
+    // and cubemap texel discretization). Larger at grazing angles where a single
+    // cubemap texel spans a wider depth range.
+    float NdotL = abs(dot(N, dir));
+    float bias = mix(0.006, 0.0015, NdotL) * currentDepth;
 
     // Build tangent frame around direction for disk sampling
     vec3 up = abs(dir.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
@@ -115,18 +109,25 @@ float cubeShadowPCSS(vec3 worldPos) {
     // Light angular size controls penumbra
     float lightSizeAngular = lightRadius / max(currentDist, 0.001);
 
-    if (lightSizeAngular < 0.0001) {
-        // Tiny light: simple hard shadow
-        float closestDepth = texture(cubeShadowMap, fragToLight).r;
-        return (currentDepth - bias > closestDepth) ? 1.0 : 0.0;
-    }
+    // Ensure minimum filter radius to avoid moiré from cubemap texel grid
+    float texelAngle = 2.0 / 2048.0; // ~2 cubemap texels in angular space
+    lightSizeAngular = max(lightSizeAngular, texelAngle);
 
     float rotation = interleavedGradientNoise(gl_FragCoord.xy) * 6.2831853;
 
-    // Step 1: Blocker search
-    float searchRadius = lightSizeAngular * 0.5;
+    // Step 1: Blocker search — always check center direction first
+    float searchRadius = min(lightSizeAngular * 0.5, 0.3); // cap to avoid overshooting
     float blockerSum = 0.0;
     int blockerCount = 0;
+
+    // Center sample (most important — directly toward the light)
+    float centerDepth = texture(cubeShadowMap, fragToLight).r;
+    if (currentDepth - bias > centerDepth) {
+        blockerSum += centerDepth;
+        blockerCount++;
+    }
+
+    // Disk samples around center
     for (int i = 0; i < PCSS_BLOCKER_SAMPLES; ++i) {
         vec2 diskOff = vogelDiskSample(i, PCSS_BLOCKER_SAMPLES, rotation) * searchRadius;
         vec3 sampleDir = normalize(dir + right * diskOff.x + up * diskOff.y);
@@ -210,18 +211,21 @@ void main()
         if (dot(N, V) < 0.0) N = -N;
 
         vec3 ambient = vec3(0.05);
-        vec3 diffuse = vec3(0.0);
+        vec3 shadowDiffuse = vec3(0.0);  // contribution from lights affected by shadow
+        vec3 otherDiffuse = vec3(0.0);   // contribution from lights NOT affected by shadow
+        int shadowIdx = numLights.y;     // index of shadow-casting light (-1 = none)
 
         int count = numLights.x;
         for (int i = 0; i < count; ++i) {
             int ltype = int(lights[i].posType.w + 0.5);
             vec3 lcol = lights[i].color.rgb;
+            vec3 contrib = vec3(0.0);
 
             if (ltype == 0) {
                 // Distant light
                 vec3 L = normalize(lights[i].dirRadius.xyz);
                 float d = max(dot(N, L), 0.0);
-                diffuse += lcol * d;
+                contrib = lcol * d;
             } else if (ltype == 1) {
                 // Point/area light — Hydra Storm style: 1/(π*d²) attenuation
                 vec3 toLight = lights[i].posType.xyz - vWorldPos;
@@ -275,15 +279,22 @@ void main()
                         atten *= max(hemi, 0.0); // sphere/cylinder: hemisphere
                     }
                 }
-                diffuse += lcol * NdotL * atten;
+                contrib = lcol * NdotL * atten;
             } else {
                 // Dome light — hemisphere ambient (more light from above)
                 float hemi = 0.5 + 0.5 * N.y;
                 ambient += lcol * mix(0.3, 1.0, hemi);
             }
+
+            // Shadow only affects the shadow-casting light's contribution.
+            // Other lights are unshadowed — light always overrides shadow.
+            if (i == shadowIdx)
+                shadowDiffuse += contrib;
+            else
+                otherDiffuse += contrib;
         }
 
-        // Shadow mapping
+        // Shadow mapping — applied only to the shadow-casting light
         float shadow = 0.0;
         if (shadowParams.w > 0.5) {
             if (shadowExtra.w > 1.5) {
@@ -299,7 +310,7 @@ void main()
                     proj.y >= 0.0 && proj.y <= 1.0)
                 {
                     float maxBias = shadowParams.z;
-                    float minBias = maxBias * 0.1;
+                    float minBias = maxBias * 0.4; // higher floor prevents shadow acne on perpendicular faces
                     vec3 lightFwd = normalize(vec3(lightVP[0][2], lightVP[1][2], lightVP[2][2]));
                     float cosTheta = abs(dot(N, lightFwd));
                     float bias = mix(maxBias, minBias, cosTheta);
@@ -307,7 +318,7 @@ void main()
                 }
             }
         }
-        diffuse *= (1.0 - shadow);
+        vec3 diffuse = shadowDiffuse * (1.0 - shadow) + otherDiffuse;
 
         vec3 lit = vColor * (ambient + diffuse);
         // Reinhard tonemapping: prevents blowout while preserving color

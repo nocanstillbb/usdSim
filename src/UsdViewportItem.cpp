@@ -174,6 +174,7 @@ private:
     float m_shadowNearP = 0.01f;
     float m_shadowFarP = 100.f;
     float m_shadowIsPerspective = 0.f;
+    int m_shadowLightIdx = -1;
 
     // Cube shadow map for sphere lights (omnidirectional)
     static constexpr int kCubeFaceSize = 2048;
@@ -4133,9 +4134,11 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         QMatrix4x4 lightView, lightProj;
         bool foundLight = false;
         m_useCubeShadow = false;
+        int shadowLightIdx = -1; // index of shadow-casting light in UBO array
 
         // Prefer first directional light
-        for (const auto &l : m_sceneLights) {
+        for (int li = 0; li < m_sceneLights.size(); ++li) {
+            const auto &l = m_sceneLights[li];
             if (l.type == 0) { // distant light
                 QVector3D dir = l.direction.normalized();
                 QVector3D up = (qAbs(dir.y()) < 0.99f) ? QVector3D(0,1,0) : QVector3D(1,0,0);
@@ -4147,6 +4150,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
                 m_shadowNearP = 0.01f;
                 m_shadowFarP = m_sceneRadius * 4.f;
                 m_shadowIsPerspective = 0.f;
+                shadowLightIdx = li;
                 foundLight = true;
                 break;
             }
@@ -4155,7 +4159,8 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         // Directional area lights (rect/disk): ortho shadow map.
         // Omnidirectional lights (sphere/cyl): cubemap shadow map (6 faces).
         if (!foundLight) {
-            for (const auto &l : m_sceneLights) {
+            for (int li = 0; li < m_sceneLights.size(); ++li) {
+                const auto &l = m_sceneLights[li];
                 if (l.type == 1) {
                     bool hasDir = l.direction.lengthSquared() > 0.001f;
                     QVector3D dir;
@@ -4167,24 +4172,17 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
                     QVector3D up = (qAbs(dir.y()) < 0.99f) ? QVector3D(0,1,0) : QVector3D(1,0,0);
                     float r = m_sceneRadius * 1.5f;
                     if (hasDir) {
-                        // Rect/Disk: perspective shadow matching the cone expansion.
-                        // The lighting cone uses effHW = hw * (1 + d), which is equivalent
-                        // to a perspective from a virtual focal point 1 unit behind the light.
-                        float hw = l.width * 0.5f;
-                        float hh = l.height * 0.5f;
-                        float maxHalf = qMax(hw, hh);
-                        if (maxHalf < 0.001f) maxHalf = 0.001f;
-                        float fov = qRadiansToDegrees(qAtan(maxHalf)) * 2.f;
-                        fov = qBound(5.f, fov, 170.f);
-                        // Eye 1 unit behind the light (matches the cone's focal point)
-                        QVector3D eye = l.position - dir * 1.f;
-                        lightView.lookAt(eye, eye + dir, up);
-                        float farDist = (m_sceneTarget - l.position).length() + m_sceneRadius * 2.f + 1.f;
-                        lightProj.perspective(fov, 1.0f, 0.1f, farDist);
+                        // Rect/Disk: orthographic shadow from light position.
+                        // Ortho gives linear depth → consistent bias for thin occluders.
+                        // (Perspective shadow maps compress depth non-linearly, making it
+                        // impossible to set a bias that works at all distances.)
+                        lightView.lookAt(l.position, l.position + dir, up);
+                        float farDist = (m_sceneTarget - l.position).length() + m_sceneRadius * 2.f;
+                        lightProj.ortho(-r, r, -r, r, 0.01f, farDist);
                         m_shadowLightRadius = 0.f;
-                        m_shadowNearP = 0.1f;
+                        m_shadowNearP = 0.01f;
                         m_shadowFarP = farDist;
-                        m_shadowIsPerspective = 1.f;
+                        m_shadowIsPerspective = 0.f; // ortho
                     } else {
                         // Sphere/Cylinder: cubemap shadow (6 faces, 90° FOV each)
                         m_useCubeShadow = true;
@@ -4219,6 +4217,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
                             m_cubeLightVP[face] = rhi->clipSpaceCorrMatrix() * cubeProj * faceView;
                         }
                     }
+                    shadowLightIdx = li;
                     foundLight = true;
                     break;
                 }
@@ -4238,6 +4237,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             m_shadowIsPerspective = 0.f;
         }
         m_lightVP = rhi->clipSpaceCorrMatrix() * lightProj * lightView;
+        m_shadowLightIdx = shadowLightIdx;
     }
 
     // Upload scene lights UBO (extended with shadow data)
@@ -4273,11 +4273,12 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             lub.lights[i].shapeSize[1] = l.height;
         }
         lub.numLights[0] = count;
+        lub.numLights[1] = m_shadowLightIdx; // -1 if no shadow, else index into lights[]
         memcpy(lub.lightVP, m_lightVP.constData(), 64);
         constexpr float kShadowSize = 2048.f;
         lub.shadowParams[0] = 1.f / kShadowSize; // texelW
         lub.shadowParams[1] = 1.f / kShadowSize; // texelH
-        lub.shadowParams[2] = 0.0005f; // fixed small bias, slope-scaling in shader handles the rest
+        lub.shadowParams[2] = 0.001f; // slope-scaled bias for 2D shadow (distant/rect/disk lights)
         lub.shadowParams[3] = (m_shadowPipeline || m_cubeShadowPipeline) ? 1.f : 0.f; // enabled
         lub.shadowExtra[0] = m_shadowLightRadius;
         lub.shadowExtra[1] = m_shadowNearP;
@@ -4486,9 +4487,8 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         if (cubeLog2++ < 5) {
             qDebug() << "CubeShadow: lightPos=" << m_cubeLightPos
                      << "farPlane=" << m_cubeFarPlane
-                     << "nearP=" << m_shadowNearP
-                     << "sceneRadius=" << m_sceneRadius
-                     << "faceSize=" << kCubeFaceSize;
+                     << "lightRadius=" << m_shadowLightRadius
+                     << "sceneRadius=" << m_sceneRadius;
             // Print VP[0][0..3] for each face to verify different matrices
             for (int f = 0; f < 6; ++f)
                 qDebug() << "  face" << f << ": VP row0="
