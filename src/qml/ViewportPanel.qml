@@ -132,17 +132,20 @@ Rectangle {
                         Layout.leftMargin: 4; Layout.rightMargin: 4 }
             Item { width: 6; height: 1 }
 
-            // ── Section 2: Grid & Snap ──
+            // ── Section 2: Grid, Shadow & Snap ──
             Row {
                 spacing: 1
                 Repeater {
                     model: [
                         { label: "网格", prop: "showGrid" },
+                        { label: "阴影", prop: "showShadow" },
                         { label: "吸附", prop: "snapEnabled" }
                     ]
                     delegate: Rectangle {
                         width: 48; height: 24; radius: 3
-                        property bool active: modelData.prop === "showGrid" ? viewport.showGrid : viewport.snapEnabled
+                        property bool active: modelData.prop === "showGrid" ? viewport.showGrid
+                                            : modelData.prop === "showShadow" ? viewport.showShadow
+                                            : viewport.snapEnabled
                         color: active ? AppStyle.accent
                              : dispArea.containsMouse ? "#40ffffff" : "transparent"
                         Text {
@@ -155,6 +158,7 @@ Rectangle {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
                                 if (modelData.prop === "showGrid") viewport.showGrid = !viewport.showGrid
+                                else if (modelData.prop === "showShadow") viewport.showShadow = !viewport.showShadow
                                 else viewport.snapEnabled = !viewport.snapEnabled
                             }
                         }

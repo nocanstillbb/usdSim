@@ -138,6 +138,7 @@ private:
     QVector<GizmoMeshData> m_gridPending;
     bool m_gridRebuild = false;
     bool m_showGrid = false;
+    bool m_showShadow = true;
     int  m_collisionDisplayMode = 0;
 
     float m_unitScale = 1.f;
@@ -1211,6 +1212,14 @@ void UsdViewportItem::setShowGrid(bool on)
     m_meshDirty = true;
     update();
     emit showGridChanged();
+}
+
+void UsdViewportItem::setShowShadow(bool on)
+{
+    if (m_showShadow == on) return;
+    m_showShadow = on;
+    update();
+    emit showShadowChanged();
 }
 
 void UsdViewportItem::setSnapEnabled(bool on)
@@ -3669,8 +3678,9 @@ void UsdViewportRenderer::synchronize(QQuickRhiItem *item)
     // Collision display mode
     m_collisionDisplayMode = vp->collisionDisplayMode();
 
-    // Grid state
+    // Grid & shadow state
     m_showGrid = vp->showGrid() && vp->document() && vp->document()->isOpen();
+    m_showShadow = vp->showShadow();
     if (vp->gridDirty()) {
         m_gridPending = vp->gridMeshes();
         vp->clearGridDirty();
@@ -4279,7 +4289,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         lub.shadowParams[0] = 1.f / kShadowSize; // texelW
         lub.shadowParams[1] = 1.f / kShadowSize; // texelH
         lub.shadowParams[2] = 0.001f; // slope-scaled bias for 2D shadow (distant/rect/disk lights)
-        lub.shadowParams[3] = (m_shadowPipeline || m_cubeShadowPipeline) ? 1.f : 0.f; // enabled
+        lub.shadowParams[3] = (m_showShadow && (m_shadowPipeline || m_cubeShadowPipeline)) ? 1.f : 0.f; // enabled
         lub.shadowExtra[0] = m_shadowLightRadius;
         lub.shadowExtra[1] = m_shadowNearP;
         lub.shadowExtra[2] = m_shadowFarP;

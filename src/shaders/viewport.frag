@@ -95,11 +95,11 @@ float cubeShadowPCSS(vec3 worldPos) {
     float currentDepth = currentDist / farPlane;
     vec3 dir = normalize(fragToLight);
 
-    // Slope-scaled depth bias (compensates for geometry expansion in shadow_cube.vert
-    // and cubemap texel discretization). Larger at grazing angles where a single
-    // cubemap texel spans a wider depth range.
+    // Slope-scaled depth bias. Light-direction expansion in shadow_cube.vert
+    // handles junction coverage; bias only needs to cover cubemap texel
+    // discretization. Keep small so thin occluder shadows are detected.
     float NdotL = abs(dot(N, dir));
-    float bias = mix(0.006, 0.0015, NdotL) * currentDepth;
+    float bias = mix(0.003, 0.001, NdotL) * currentDepth;
 
     // Build tangent frame around direction for disk sampling
     vec3 up = abs(dir.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);

@@ -79,6 +79,7 @@ class UsdViewportItem : public QQuickRhiItem
     Q_PROPERTY(QPointF orientLabelY READ orientLabelY NOTIFY orientLabelsChanged)
     Q_PROPERTY(QPointF orientLabelZ READ orientLabelZ NOTIFY orientLabelsChanged)
     Q_PROPERTY(bool showGrid READ showGrid WRITE setShowGrid NOTIFY showGridChanged)
+    Q_PROPERTY(bool showShadow READ showShadow WRITE setShowShadow NOTIFY showShadowChanged)
     Q_PROPERTY(bool snapEnabled READ snapEnabled WRITE setSnapEnabled NOTIFY snapEnabledChanged)
     Q_PROPERTY(QString stageUnitLabel READ stageUnitLabel NOTIFY stageUnitLabelChanged)
     Q_PROPERTY(int collisionDisplayMode READ collisionDisplayMode WRITE setCollisionDisplayMode NOTIFY collisionDisplayModeChanged)
@@ -114,6 +115,8 @@ public:
     // Grid & Snap
     bool showGrid() const { return m_showGrid; }
     void setShowGrid(bool on);
+    bool showShadow() const { return m_showShadow; }
+    void setShowShadow(bool on);
     bool snapEnabled() const { return m_snapEnabled; }
     void setSnapEnabled(bool on);
     QString stageUnitLabel() const { return m_stageUnitLabel; }
@@ -148,6 +151,7 @@ signals:
     void gizmoDragFinished(const QString &primPath);
     void orientLabelsChanged();
     void showGridChanged();
+    void showShadowChanged();
     void snapEnabledChanged();
     void stageUnitLabelChanged();
     void collisionDisplayModeChanged();
@@ -228,6 +232,7 @@ private:
 
     // Grid & Snap
     bool m_showGrid = true;
+    bool m_showShadow = true;
     bool m_snapEnabled = false;
     bool m_gridDirty = false;
     QVector<GizmoMeshData> m_gridMeshes;
