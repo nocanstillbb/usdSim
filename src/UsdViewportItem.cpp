@@ -4471,7 +4471,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         ou.params[0] = 1.f / float(sz.width());   // texelSize.x
         ou.params[1] = 1.f / float(sz.height());  // texelSize.y
         ou.params[2] = 3.f;                        // radius in pixels
-        ou.params[3] = rhi->isYUpInFramebuffer() ? 0.f : 1.f; // flip UV.y for Metal/Vulkan
+        ou.params[3] = 0.f; // no UV flip — fullscreen tri and render target share the same Y convention
         upd->updateDynamicBuffer(m_outlineUbuf, 0, sizeof(OutUBuf), &ou);
     }
 
