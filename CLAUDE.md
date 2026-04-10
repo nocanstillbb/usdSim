@@ -180,25 +180,37 @@ Usage:
 
 ## Shadow Mapping
 
-The viewport supports shadow mapping for all light types:
+The viewport supports shadow mapping for all light types. A toolbar toggle "阴影" controls shadow on/off (`showShadow` property).
+
+### Single shadow map constraint
+Only **one** light casts shadows at a time (priority: first distant light → first area light).
+Shadow only darkens the shadow-casting light's own contribution (`shadowIdx` in shader).
+Other lights are unaffected — light always overrides shadow from a different source.
 
 ### Directional / Rect / Disk lights
 - Single 2048×2048 2D depth shadow map
-- Orthographic projection from light
+- **Orthographic projection** from light position (rect/disk) or from scene (distant)
+- Ortho gives linear depth → consistent bias at all distances
 - PCSS (Percentage Closer Soft Shadows) with blocker search + variable-width PCF
+- Rect/disk lights with zero `lightRadius` fall back to 3×3 PCF (hard shadows)
 
 ### Sphere / Cylinder lights (omnidirectional)
 - **Cubemap shadow map**: 6-face R32F cubemap, 2048×2048 per face
 - Each face uses a separate UBO per mesh (6 UBOs) to avoid QRhi dynamic buffer reuse issues
 - Cube shadow shaders: `shadow_cube.vert` / `shadow_cube.frag`
-- `shadow_cube.vert`: expands geometry along normals by ~2 cubemap texels to prevent junction light leaks
+- `shadow_cube.vert`: expands geometry **away from light** by ~2 cubemap texels to grow shadows outward
 - `shadow_cube.frag`: stores exact linear distance `length(worldPos - lightPos) / farPlane`
-- Sampling in `viewport.frag`: direction-based cubemap lookup with normal offset bias and PCSS
+- Sampling in `viewport.frag`: uses **original worldPos** for cubemap direction (no normal offset — prevents direction being pushed past thin occluders) + PCSS
 
 ### Shadow bias strategy
-- **Geometry expansion** (shadow_cube.vert): vertices pushed along normals in clip space only (not world pos), covering more cubemap texels at surface edges
-- **Normal offset** (viewport.frag): sampling point pushed along surface normal to prevent self-shadowing
-- **Depth bias** (viewport.frag): proportional to distance, slope-scaled by NdotL
+- **Geometry expansion** (shadow_cube.vert): vertices pushed **away from light** (not along normals). Normal-direction expansion shifts the shadow toward the light, creating gaps at panel-shelf junctions. Light-direction expansion grows the shadow outward, covering junctions.
+- **No normal offset** in fragment shader — removed to prevent sampling direction being pushed past thin partitions/shelves
+- **Depth bias** (viewport.frag): slope-scaled by NdotL, proportional to normalized distance. Kept small to detect thin occluder shadows.
+
+### Per-light shadow isolation
+- Shadow light index (`numLights.y`) passed to fragment shader
+- Diffuse split into `shadowDiffuse` (shadow-casting light) and `otherDiffuse` (all others)
+- Shadow factor applied only to `shadowDiffuse`: `diffuse = shadowDiffuse * (1-shadow) + otherDiffuse`
 
 ## Camera Save/Restore
 
