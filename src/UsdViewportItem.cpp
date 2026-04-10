@@ -170,7 +170,8 @@ private:
     QRhiGraphicsPipeline *m_shadowPipeline = nullptr;
     QRhiSampler *m_shadowSampler = nullptr;
     QShader m_shadowVs, m_shadowFs;
-    QMatrix4x4 m_lightVP;
+    QMatrix4x4 m_lightVP;        // for shadow render pass (gl_Position)
+    QMatrix4x4 m_lightVP_lookup; // for shadow lookup in fragment shader (NDC→[0,1] UV+depth)
     float m_shadowLightRadius = 0.f;
     float m_shadowNearP = 0.01f;
     float m_shadowFarP = 100.f;
@@ -4219,12 +4220,29 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
                         };
                         QMatrix4x4 cubeProj;
                         cubeProj.perspective(90.0f, 1.0f, nearP, farP);
+
+                        // For cubemap faces, use a clip correction that only
+                        // adjusts Z range (no Y flip). clipSpaceCorrMatrix()
+                        // flips Y on Metal/Vulkan, which mirrors each face's
+                        // content vertically. Cubemap sampling uses direction
+                        // vectors (not UV), so the Y flip is NOT compensated
+                        // by texture convention differences — it causes
+                        // shadows to appear Y-reversed.
+                        QMatrix4x4 cubeClipCorr = rhi->clipSpaceCorrMatrix();
+                        if (!rhi->isYUpInFramebuffer()) {
+                            // Undo Y flip: negate row 1 scale
+                            cubeClipCorr(1, 0) = -cubeClipCorr(1, 0);
+                            cubeClipCorr(1, 1) = -cubeClipCorr(1, 1);
+                            cubeClipCorr(1, 2) = -cubeClipCorr(1, 2);
+                            cubeClipCorr(1, 3) = -cubeClipCorr(1, 3);
+                        }
+
                         for (int face = 0; face < 6; ++face) {
                             QMatrix4x4 faceView;
                             faceView.lookAt(l.position,
                                             l.position + targets[face],
                                             ups[face]);
-                            m_cubeLightVP[face] = rhi->clipSpaceCorrMatrix() * cubeProj * faceView;
+                            m_cubeLightVP[face] = cubeClipCorr * cubeProj * faceView;
                         }
                     }
                     shadowLightIdx = li;
@@ -4247,6 +4265,16 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
             m_shadowIsPerspective = 0.f;
         }
         m_lightVP = rhi->clipSpaceCorrMatrix() * lightProj * lightView;
+
+        // Separate lookup matrix: maps world pos → [0,1] UV + [0,1] depth directly,
+        // so the shader doesn't need manual NDC→texture conversion.
+        // clipSpaceCorrMatrix() bakes a Z remap on Vulkan/Metal that would be
+        // double-applied by the old "proj * 0.5 + 0.5" in the shader.
+        QMatrix4x4 ndcToUV;
+        ndcToUV.translate(0.5f, 0.5f, 0.5f);
+        ndcToUV.scale(0.5f, rhi->isYUpInFramebuffer() ? 0.5f : -0.5f, 0.5f);
+        m_lightVP_lookup = ndcToUV * lightProj * lightView;
+
         m_shadowLightIdx = shadowLightIdx;
     }
 
@@ -4284,7 +4312,7 @@ void UsdViewportRenderer::render(QRhiCommandBuffer *cb)
         }
         lub.numLights[0] = count;
         lub.numLights[1] = m_shadowLightIdx; // -1 if no shadow, else index into lights[]
-        memcpy(lub.lightVP, m_lightVP.constData(), 64);
+        memcpy(lub.lightVP, m_lightVP_lookup.constData(), 64);
         constexpr float kShadowSize = 2048.f;
         lub.shadowParams[0] = 1.f / kShadowSize; // texelW
         lub.shadowParams[1] = 1.f / kShadowSize; // texelH

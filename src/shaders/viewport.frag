@@ -304,7 +304,6 @@ void main()
                 // 2D shadow mode (directional/rect/disk lights — PCSS)
                 vec4 lsPos = lightVP * vec4(vWorldPos, 1.0);
                 vec3 proj = lsPos.xyz / lsPos.w;
-                proj = proj * 0.5 + 0.5;
                 if (proj.z > 0.0 && proj.z <= 1.0 &&
                     proj.x >= 0.0 && proj.x <= 1.0 &&
                     proj.y >= 0.0 && proj.y <= 1.0)
